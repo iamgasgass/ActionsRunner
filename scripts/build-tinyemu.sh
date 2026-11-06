@@ -49,13 +49,15 @@ C
 # $1 = nome variante, $2 = cartella sorgenti, $3.. = flag extra
 build_variant() {
   local variant=$1 src=$2; shift 2
-  local extra=("$@")
+  # bash 3.2 di macOS: un array vuoto con "set -u" è "unbound", quindi si espande con ${a[@]+...}
+  local extra=()
+  if [ $# -gt 0 ]; then extra=("$@"); fi
   local objdir="$src/ios-obj"
   rm -rf "$objdir" && mkdir -p "$objdir"
   cp "$ROOT/scripts/tinyemu-ios/compat.h" "$ROOT/scripts/tinyemu-ios/compat.c" "$src/"
   rm -rf "$src/ios-stubs" && cp -R "$ROOT/scripts/tinyemu-ios/stubs" "$src/ios-stubs"
   local flags=("${COMMON_FLAGS[@]}" "-DCONFIG_VERSION=\"$(cat "$src/VERSION" 2>/dev/null || echo "$variant")\""
-               -I"$src" -I"$src/ios-stubs" -include "$src/compat.h" "${extra[@]}")
+               -I"$src" -I"$src/ios-stubs" -include "$src/compat.h" ${extra[@]+"${extra[@]}"})
   local objs=()
   local f
   echo "=== Variante: $variant ($src)"
@@ -77,6 +79,7 @@ build_variant() {
   done
   local lib="$objdir/libtemu.a"
   rm -f "$lib"
+  [ ${#objs[@]} -gt 0 ] || { echo "  nessun oggetto compilato"; return 1; }
   "$AR" rcs "$lib" "${objs[@]}"
   if ! "$NM" -g "$lib" 2>/dev/null | grep -q " T _temu_main"; then
     echo "  temu_main non esportato"; return 1
