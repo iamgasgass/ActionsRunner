@@ -125,7 +125,7 @@ struct LogPanelRow: View {
                 UnevenRoundedRectangle(topLeadingRadius: isFirst ? 16 : 0, bottomLeadingRadius: isLast ? 16 : 0,
                                        bottomTrailingRadius: isLast ? 16 : 0, topTrailingRadius: isFirst ? 16 : 0,
                                        style: .continuous)
-                    .fill(Color.white.opacity(0.05))
+                    .fill(Color.glassLine.opacity(0.05))
             }
     }
 

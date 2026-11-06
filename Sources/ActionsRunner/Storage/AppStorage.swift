@@ -35,7 +35,7 @@ enum AppPaths {
 // MARK: - Keychain
 
 enum Keychain {
-    static let service = "com.actionsrunner.app"
+    static let service = "com.iamgasgass.actionsrunner"
 
     static func set(_ value: String?, for account: String) {
         let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword,

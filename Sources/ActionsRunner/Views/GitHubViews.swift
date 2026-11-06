@@ -20,7 +20,7 @@ struct GitHubAccountView: View {
                     GlassSectionHeading(title: "Account collegato", subtitle: "Token salvato nel portachiavi di questo iPhone.",
                                         symbol: "person.crop.circle.badge.checkmark")
                     if checking {
-                        HStack(spacing: 10) { ProgressView().tint(.white); Text("Verifica…").font(.subheadline) }
+                        HStack(spacing: 10) { ProgressView().tint(Color.glassInk); Text("Verifica…").font(.subheadline) }
                     }
                     if let info {
                         GlassDetailRow(title: "Utente", value: info.user.login, symbol: "person")
@@ -87,7 +87,7 @@ struct GitHubAccountView: View {
                     }
                 } label: {
                     HStack(spacing: 9) {
-                        if checking { ProgressView().tint(.white) }
+                        if checking { ProgressView().tint(Color.glassInk) }
                         Text(hasToken ? "Sostituisci e verifica" : "Salva e verifica")
                     }
                 }
@@ -180,7 +180,7 @@ struct RepoPickerView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                .tint(.white)
+                .tint(Color.glassInk)
                 Button {
                     Task {
                         creating = true
@@ -195,7 +195,7 @@ struct RepoPickerView: View {
                     }
                 } label: {
                     HStack(spacing: 9) {
-                        if creating { ProgressView().tint(.white) } else { Image(systemName: "plus") }
+                        if creating { ProgressView().tint(Color.glassInk) } else { Image(systemName: "plus") }
                         Text(creating ? "Creazione…" : "Crea repository")
                     }
                 }
@@ -210,7 +210,7 @@ struct RepoPickerView: View {
 
             if loading {
                 HStack(spacing: 10) {
-                    ProgressView().tint(.white)
+                    ProgressView().tint(Color.glassInk)
                     Text("Caricamento…").font(.subheadline)
                 }
                 .glassSection(cornerRadius: 24)
@@ -353,7 +353,7 @@ struct CloudRunConfigView: View {
                                 .font(.system(.subheadline, design: .monospaced))
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
-                            if loadingBranch { ProgressView().tint(.white) }
+                            if loadingBranch { ProgressView().tint(Color.glassInk) }
                         }
                     }
                     Text("Il branch diventa una copia esatta del progetto (i file che non sono nel progetto vengono rimossi dal branch con un nuovo commit; la storia precedente resta). Vengono caricati solo i file cambiati.")
@@ -371,7 +371,7 @@ struct CloudRunConfigView: View {
                             ForEach(CloudTrigger.allCases) { Text($0.label).tag($0) }
                         }
                         .pickerStyle(.menu)
-                        .tint(.white)
+                        .tint(Color.glassInk)
                     }
                     if trigger == .auto {
                         Text(workflow.supportsDispatch ? "Il workflow dichiara workflow_dispatch: verrà avviato direttamente."
@@ -419,7 +419,7 @@ struct CloudRunConfigView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    .tint(.white)
+                    .tint(Color.glassInk)
                     .disabled(settings.localSecrets.isEmpty && settings.localVariables.isEmpty)
                 }
                 .glassSection()
@@ -538,7 +538,7 @@ struct CloudRunView: View {
                             Button("Riesegui con log di debug") { act { try await runs.engine(for: model)?.rerun(failedOnly: false, debug: true) } }
                         } label: {
                             HStack(spacing: 10) {
-                                if busy { ProgressView().tint(.white) } else { Image(systemName: "arrow.clockwise") }
+                                if busy { ProgressView().tint(Color.glassInk) } else { Image(systemName: "arrow.clockwise") }
                                 Text("Riesegui")
                             }
                         }
@@ -631,8 +631,8 @@ struct CloudRunView: View {
             HStack(alignment: .top, spacing: 14) {
                 StatusIcon(status: model.status, conclusion: model.conclusion, size: 24)
                     .frame(width: 52, height: 52)
-                    .background { Circle().fill(Color.white.opacity(0.075)) }
-                    .overlay { Circle().strokeBorder(Color.white.opacity(0.16), lineWidth: 0.8) }
+                    .background { Circle().fill(Color.glassLine.opacity(0.075)) }
+                    .overlay { Circle().strokeBorder(Color.glassLine.opacity(0.16), lineWidth: 0.8) }
                 VStack(alignment: .leading, spacing: 5) {
                     Text(model.run?.displayTitle ?? model.title)
                         .font(.system(.title3, design: .rounded, weight: .bold))
@@ -670,7 +670,7 @@ struct CloudRunView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let p = model.uploadProgress {
-                ProgressView(value: p).tint(.white)
+                ProgressView(value: p).tint(Color.glassInk)
             }
             if model.run?.status == "queued" || model.run?.status == "waiting" {
                 Text("In coda: in attesa di un runner di GitHub…").font(.footnote).foregroundStyle(.secondary)
@@ -704,8 +704,8 @@ struct CloudJobRow: View {
         HStack(spacing: 14) {
             StatusIcon(api: job.job.status, conclusion: job.job.conclusion, size: 18)
                 .frame(width: 44, height: 44)
-                .background { Circle().fill(Color.white.opacity(0.075)) }
-                .overlay { Circle().strokeBorder(Color.white.opacity(0.16), lineWidth: 0.8) }
+                .background { Circle().fill(Color.glassLine.opacity(0.075)) }
+                .overlay { Circle().strokeBorder(Color.glassLine.opacity(0.16), lineWidth: 0.8) }
             VStack(alignment: .leading, spacing: 4) {
                 Text(job.job.name)
                     .font(.system(.subheadline, design: .rounded, weight: .semibold))
@@ -854,7 +854,7 @@ struct CloudJobView: View {
             }
         case .loading:
             HStack(spacing: 10) {
-                ProgressView().tint(.white)
+                ProgressView().tint(Color.glassInk)
                 Text("Caricamento dei log…").font(.subheadline)
             }
             .glassInset()
@@ -916,7 +916,7 @@ struct CloudArtifactRow: View {
                         }
                     } label: {
                         HStack(spacing: 9) {
-                            if model.downloading.contains(artifact.id) { ProgressView().tint(.white) } else { Image(systemName: "arrow.down.circle") }
+                            if model.downloading.contains(artifact.id) { ProgressView().tint(Color.glassInk) } else { Image(systemName: "arrow.down.circle") }
                             Text(model.downloading.contains(artifact.id) ? "Download…" : "Scarica")
                         }
                     }
@@ -956,10 +956,10 @@ struct ArtifactContentsView: View {
                         ShareLink(item: f.url) {
                             Image(systemName: "square.and.arrow.up")
                                 .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(Color.glassInk)
                                 .frame(width: 40, height: 40)
-                                .background { Circle().fill(Color.white.opacity(0.075)) }
-                                .overlay { Circle().strokeBorder(Color.white.opacity(0.16), lineWidth: 0.8) }
+                                .background { Circle().fill(Color.glassLine.opacity(0.075)) }
+                                .overlay { Circle().strokeBorder(Color.glassLine.opacity(0.16), lineWidth: 0.8) }
                         }
                         .buttonStyle(.plain)
                     }

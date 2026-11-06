@@ -5,7 +5,11 @@ App iOS (SwiftUI, iOS 17+) che importa un **file .zip contenente una repository*
 mostrando nell'app job, step, log, annotazioni e artifact (es. l'IPA). Nessuna libreria di terze parti.
 
 Interfaccia interamente **Liquid Glass** (`Views/GlassUI.swift`): vetro nativo `glassEffect` su iOS 26,
-materiale come ripiego su iOS 17–25, sfondo graphite, schede, pulsanti e campi in vetro, tema scuro.
+materiale come ripiego su iOS 17–25; schede, pulsanti e campi in vetro. Aspetto **Sistema / Chiaro / Scuro**
+(Impostazioni → Aspetto): sfondo graphite nello scuro, porcellana grigio-azzurra nel chiaro.
+Icona: blu notte originale (predefinita), variante **scura** sul nero di sistema e **tinted** (iOS 18+).
+
+Bundle ID: `com.iamgasgass.actionsrunner`.
 
 ## Uso
 

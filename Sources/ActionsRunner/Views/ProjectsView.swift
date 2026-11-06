@@ -13,7 +13,7 @@ struct ProjectsView: View {
 
             if store.isImporting {
                 HStack(spacing: 13) {
-                    ProgressView().tint(.white)
+                    ProgressView().tint(Color.glassInk)
                     Text("Importazione in corso…")
                         .font(.system(.headline, design: .rounded, weight: .semibold))
                 }
@@ -230,7 +230,7 @@ struct WorkflowRow: View {
                 HStack(spacing: 8) {
                     Text(workflow.eventNames.joined(separator: ", "))
                         .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(Color.glassInk.opacity(0.85))
                         .lineLimit(1)
                     Text("\(workflow.jobs.count) job").font(.caption2).foregroundStyle(.secondary)
                     if errors > 0 { Label("\(errors)", systemImage: "xmark.octagon.fill").font(.caption2).foregroundStyle(.red) }

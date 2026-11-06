@@ -4,6 +4,7 @@ struct SettingsView: View {
     @Environment(AppSettings.self) private var settings
     @State private var cacheMessage: String?
     @State private var connected = GitHubAPI.stored != nil
+    @AppStorage(AppAppearance.storageKey) private var appearance: AppAppearance = .system
 
     var body: some View {
         @Bindable var s = settings
@@ -16,9 +17,9 @@ struct SettingsView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .overlay {
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.20), lineWidth: 0.8)
+                            .strokeBorder(Color.glassLine.opacity(0.20), lineWidth: 0.8)
                     }
-                    .shadow(color: .black.opacity(0.22), radius: 11, x: 0, y: 5)
+                    .shadow(color: Color.glassShadow, radius: 11, x: 0, y: 5)
 
                 VStack(alignment: .leading, spacing: 5) {
                     Text("ACTIONS RUNNER")
@@ -27,7 +28,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                     Text("Control center")
                         .font(.system(.title2, design: .rounded, weight: .bold))
-                    Text("Account GitHub, secrets e variabili")
+                    Text("Account GitHub, aspetto, secrets e variabili")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -56,6 +57,18 @@ struct SettingsView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            .glassSection()
+
+            VStack(alignment: .leading, spacing: 14) {
+                GlassSectionHeading(title: "Aspetto", subtitle: "Segui l'iPhone oppure scegli chiaro o scuro.",
+                                    symbol: appearance.symbol)
+                Picker("Aspetto", selection: $appearance) {
+                    ForEach(AppAppearance.allCases) { a in
+                        Text(a.label).tag(a)
+                    }
+                }
+                .pickerStyle(.segmented)
             }
             .glassSection()
 

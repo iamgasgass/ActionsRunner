@@ -9,7 +9,7 @@ struct AnnotationRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: level == "error" || level == "failure" ? "xmark.octagon.fill" : (level == "warning" ? "exclamationmark.triangle.fill" : "info.circle.fill"))
-                .foregroundStyle(level == "error" || level == "failure" ? Color.red : (level == "warning" ? Color.orange : Color.white.opacity(0.8)))
+                .foregroundStyle(level == "error" || level == "failure" ? Color.red : (level == "warning" ? Color.orange : Color.glassInk.opacity(0.8)))
             VStack(alignment: .leading, spacing: 3) {
                 if let t = title, !t.isEmpty { Text(t).font(.footnote.bold()) }
                 Text(message).font(.footnote).textSelection(.enabled)
@@ -57,8 +57,8 @@ struct CloudRunRow: View {
         HStack(spacing: 14) {
             StatusIcon(status: model.status, conclusion: model.conclusion, size: 22)
                 .frame(width: 48, height: 48)
-                .background { Circle().fill(Color.white.opacity(0.075)) }
-                .overlay { Circle().strokeBorder(Color.white.opacity(0.16), lineWidth: 0.8) }
+                .background { Circle().fill(Color.glassLine.opacity(0.075)) }
+                .overlay { Circle().strokeBorder(Color.glassLine.opacity(0.16), lineWidth: 0.8) }
             VStack(alignment: .leading, spacing: 5) {
                 Text(model.run?.displayTitle ?? model.title)
                     .font(.system(.headline, design: .rounded, weight: .semibold))

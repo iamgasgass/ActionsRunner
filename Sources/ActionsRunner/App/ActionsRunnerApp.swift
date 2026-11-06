@@ -23,6 +23,7 @@ struct ActionsRunnerApp: App {
 
 struct RootView: View {
     @State private var selection = 0
+    @AppStorage(AppAppearance.storageKey) private var appearance: AppAppearance = .system
 
     var body: some View {
         ZStack {
@@ -39,9 +40,10 @@ struct RootView: View {
                     .tabItem { Label("Impostazioni", systemImage: "slider.horizontal.3") }
                     .tag(2)
             }
-            .tint(.white)
+            .tint(Color.glassInk)
         }
-        .preferredColorScheme(.dark)
+        .onAppear { AppAppearance.apply(appearance) }
+        .onChange(of: appearance) { _, newValue in AppAppearance.apply(newValue) }
     }
 }
 

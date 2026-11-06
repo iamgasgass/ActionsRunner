@@ -8,49 +8,107 @@
 //
 
 import SwiftUI
+import UIKit
+
+extension Color {
+    /// Inchiostro del vetro: bianco con l'aspetto scuro, nero con quello chiaro.
+    static let glassInk = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .white : .black })
+    /// Linee e riempimenti del vetro (bordi, cerchi): bianco nello scuro, nero attenuato nel chiaro.
+    static let glassLine = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .white : UIColor(white: 0, alpha: 0.55) })
+    /// Ombra delle schede: più leggera nell'aspetto chiaro.
+    static let glassShadow = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 0, alpha: 0.18) : UIColor(white: 0, alpha: 0.07) })
+}
 
 /// Atmospheric graphite backdrop inspired by the app icon. It stays behind
 /// content so Apple's glass surfaces can refract the background naturally.
 struct AppGlassBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         GeometryReader { proxy in
-            ZStack {
-                Color.black
-
-                LinearGradient(
-                    // Near-black graphite gradient keeps the native glass
-                    // readable without washing the screen into grey.
-                    colors: [
-                        Color(red: 0.035, green: 0.038, blue: 0.045),
-                        Color(red: 0.012, green: 0.014, blue: 0.018),
-                        Color.black
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-
-                Circle()
-                    .fill(Color(red: 0.72, green: 0.78, blue: 0.86).opacity(0.045))
-                    .frame(width: proxy.size.width * 0.78)
-                    .blur(radius: 100)
-                    .offset(x: proxy.size.width * 0.42, y: -proxy.size.height * 0.34)
-
-                Circle()
-                    .fill(Color.white.opacity(0.022))
-                    .frame(width: proxy.size.width * 0.66)
-                    .blur(radius: 90)
-                    .offset(x: -proxy.size.width * 0.50, y: proxy.size.height * 0.10)
-
-                LinearGradient(
-                    colors: [.clear, Color.black.opacity(0.78)],
-                    startPoint: .center,
-                    endPoint: .bottom
-                )
+            Group {
+                if colorScheme == .dark {
+                    darkBackdrop(proxy)
+                } else {
+                    lightBackdrop(proxy)
+                }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
         .ignoresSafeArea()
         .accessibilityHidden(true)
+    }
+
+    /// Aspetto scuro originale (graphite quasi nero).
+    private func darkBackdrop(_ proxy: GeometryProxy) -> some View {
+        ZStack {
+            Color.black
+
+            LinearGradient(
+                // Near-black graphite gradient keeps the native glass
+                // readable without washing the screen into grey.
+                colors: [
+                    Color(red: 0.035, green: 0.038, blue: 0.045),
+                    Color(red: 0.012, green: 0.014, blue: 0.018),
+                    Color.black
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            Circle()
+                .fill(Color(red: 0.72, green: 0.78, blue: 0.86).opacity(0.045))
+                .frame(width: proxy.size.width * 0.78)
+                .blur(radius: 100)
+                .offset(x: proxy.size.width * 0.42, y: -proxy.size.height * 0.34)
+
+            Circle()
+                .fill(Color.white.opacity(0.022))
+                .frame(width: proxy.size.width * 0.66)
+                .blur(radius: 90)
+                .offset(x: -proxy.size.width * 0.50, y: proxy.size.height * 0.10)
+
+            LinearGradient(
+                colors: [.clear, Color.black.opacity(0.78)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+        }
+    }
+
+    /// Aspetto chiaro: porcellana grigio-azzurra con gli stessi riflessi sfocati.
+    private func lightBackdrop(_ proxy: GeometryProxy) -> some View {
+        ZStack {
+            Color(red: 0.955, green: 0.960, blue: 0.970)
+
+            LinearGradient(
+                colors: [
+                    Color(red: 0.985, green: 0.988, blue: 0.995),
+                    Color(red: 0.940, green: 0.947, blue: 0.960),
+                    Color(red: 0.905, green: 0.915, blue: 0.932)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            Circle()
+                .fill(Color(red: 0.62, green: 0.70, blue: 0.84).opacity(0.22))
+                .frame(width: proxy.size.width * 0.78)
+                .blur(radius: 100)
+                .offset(x: proxy.size.width * 0.42, y: -proxy.size.height * 0.34)
+
+            Circle()
+                .fill(Color.white.opacity(0.70))
+                .frame(width: proxy.size.width * 0.66)
+                .blur(radius: 90)
+                .offset(x: -proxy.size.width * 0.50, y: proxy.size.height * 0.10)
+
+            LinearGradient(
+                colors: [.clear, Color(red: 0.86, green: 0.875, blue: 0.90).opacity(0.70)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+        }
     }
 }
 
@@ -64,14 +122,14 @@ struct GlassSectionHeading: View {
             if let symbol {
                 Image(systemName: symbol)
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .foregroundStyle(Color.glassInk.opacity(0.92))
                     .frame(width: 42, height: 42)
                     .background {
                         Circle()
-                            .fill(Color.white.opacity(0.075))
+                            .fill(Color.glassLine.opacity(0.075))
                     }
                     .overlay {
-                        Circle().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
+                        Circle().strokeBorder(Color.glassLine.opacity(0.14), lineWidth: 0.8)
                     }
             }
 
@@ -98,13 +156,13 @@ struct GlassIconBadge: View {
     var body: some View {
         Image(systemName: symbol)
             .font(.system(size: size * 0.40, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.95))
+            .foregroundStyle(Color.glassInk.opacity(0.95))
             .frame(width: size, height: size)
             .background {
-                Circle().fill(Color.white.opacity(0.075))
+                Circle().fill(Color.glassLine.opacity(0.075))
             }
             .overlay {
-                Circle().strokeBorder(Color.white.opacity(0.16), lineWidth: 0.8)
+                Circle().strokeBorder(Color.glassLine.opacity(0.16), lineWidth: 0.8)
             }
     }
 }
@@ -125,9 +183,9 @@ private struct LiquidGlassCardModifier: ViewModifier {
                 }
             }
             .overlay {
-                shape.strokeBorder(Color.white.opacity(borderOpacity), lineWidth: 0.8)
+                shape.strokeBorder(Color.glassLine.opacity(borderOpacity), lineWidth: 0.8)
             }
-            .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 9)
+            .shadow(color: Color.glassShadow, radius: 18, x: 0, y: 9)
     }
 }
 
@@ -146,7 +204,7 @@ struct LiquidGlassButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(.headline, design: .rounded, weight: .semibold))
-            .foregroundStyle(prominent ? Color.white : Color.primary)
+            .foregroundStyle(Color.primary)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
@@ -155,7 +213,7 @@ struct LiquidGlassButtonStyle: ButtonStyle {
                     if prominent {
                         Capsule()
                             .fill(Color.clear)
-                            .glassEffect(.regular.tint(Color.white.opacity(0.10)).interactive(), in: Capsule())
+                            .glassEffect(.regular.tint(Color.glassLine.opacity(0.10)).interactive(), in: Capsule())
                     } else {
                         Capsule()
                             .fill(Color.clear)
@@ -167,7 +225,7 @@ struct LiquidGlassButtonStyle: ButtonStyle {
             }
             .overlay {
                 Capsule().strokeBorder(
-                    Color.white.opacity(configuration.isPressed ? 0.30 : (prominent ? 0.22 : 0.13)),
+                    Color.glassLine.opacity(configuration.isPressed ? 0.30 : (prominent ? 0.22 : 0.13)),
                     lineWidth: 0.8
                 )
             }
@@ -196,15 +254,60 @@ struct GlassStatusPill: View {
     var body: some View {
         Label(title, systemImage: symbol)
             .font(.system(.caption, design: .rounded, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.85))
+            .foregroundStyle(Color.glassInk.opacity(0.85))
             .padding(.horizontal, 11)
             .padding(.vertical, 7)
             .background {
-                Capsule().fill(Color.white.opacity(0.075))
+                Capsule().fill(Color.glassLine.opacity(0.075))
             }
             .overlay {
-                Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.7)
+                Capsule().strokeBorder(Color.glassLine.opacity(0.12), lineWidth: 0.7)
             }
+    }
+}
+
+// MARK: - Aspetto (Sistema / Chiaro / Scuro)
+
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case system, light, dark
+
+    static let storageKey = "appearance"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .system: return "Sistema"
+        case .light: return "Chiaro"
+        case .dark: return "Scuro"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .system: return "circle.lefthalf.filled"
+        case .light: return "sun.max.fill"
+        case .dark: return "moon.fill"
+        }
+    }
+
+    var interfaceStyle: UIUserInterfaceStyle {
+        switch self {
+        case .system: return .unspecified
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+
+    /// Applicato alle finestre (vale anche per fogli e avvisi; con "Sistema" segue subito l'iPhone).
+    @MainActor
+    static func apply(_ appearance: AppAppearance) {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for window in windowScene.windows {
+                window.overrideUserInterfaceStyle = appearance.interfaceStyle
+            }
+        }
     }
 }
 
@@ -303,7 +406,7 @@ struct GlassFieldLabel: View {
 
 struct GlassDivider: View {
     var body: some View {
-        Rectangle().fill(Color.white.opacity(0.10)).frame(height: 1)
+        Rectangle().fill(Color.glassLine.opacity(0.10)).frame(height: 1)
     }
 }
 
@@ -350,9 +453,9 @@ struct GlassHeroCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: markSize * 0.24, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: markSize * 0.24, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.20), lineWidth: 0.8)
+                        .strokeBorder(Color.glassLine.opacity(0.20), lineWidth: 0.8)
                 }
-                .shadow(color: .black.opacity(0.22), radius: 12, x: 0, y: 6)
+                .shadow(color: Color.glassShadow, radius: 12, x: 0, y: 6)
 
             VStack(alignment: .leading, spacing: 7) {
                 Text(eyebrow)
@@ -389,8 +492,8 @@ struct GlassEmptyState: View {
                 .font(.system(size: 32, weight: .light))
                 .foregroundStyle(.secondary)
                 .frame(width: 74, height: 74)
-                .background(Circle().fill(Color.white.opacity(0.055)))
-                .overlay(Circle().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.8))
+                .background(Circle().fill(Color.glassLine.opacity(0.055)))
+                .overlay(Circle().strokeBorder(Color.glassLine.opacity(0.12), lineWidth: 0.8))
 
             Text(title)
                 .font(.system(.headline, design: .rounded, weight: .bold))

@@ -42,7 +42,7 @@ struct WorkflowDetailView: View {
                     ForEach(workflow.diagnostics) { d in
                         HStack(alignment: .top, spacing: 10) {
                             Image(systemName: d.severity == .error ? "xmark.octagon.fill" : (d.severity == .warning ? "exclamationmark.triangle.fill" : "info.circle"))
-                                .foregroundStyle(d.severity == .error ? Color.red : (d.severity == .warning ? Color.orange : Color.white.opacity(0.8)))
+                                .foregroundStyle(d.severity == .error ? Color.red : (d.severity == .warning ? Color.orange : Color.glassInk.opacity(0.8)))
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(d.message).font(.footnote)
                                 if let l = d.location {
@@ -82,8 +82,8 @@ struct WorkflowDetailView: View {
                             Text("\(idx + 1)")
                                 .font(.system(.caption, design: .rounded, weight: .bold))
                                 .frame(width: 28, height: 28)
-                                .background(Circle().fill(Color.white.opacity(0.075)))
-                                .overlay(Circle().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8))
+                                .background(Circle().fill(Color.glassLine.opacity(0.075)))
+                                .overlay(Circle().strokeBorder(Color.glassLine.opacity(0.14), lineWidth: 0.8))
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(job.displayName).font(.system(.headline, design: .rounded, weight: .semibold))
                                 if let ro = job.runsOn {
@@ -124,8 +124,7 @@ struct WorkflowDetailView: View {
                 }
             }
             .presentationDetents([.large])
-            .preferredColorScheme(.dark)
-            .tint(.white)
+            .tint(Color.glassInk)
         }
         .navigationDestination(item: $startedCloud) { m in CloudRunView(model: m) }
     }
@@ -144,7 +143,7 @@ struct DispatchInputsForm: View {
                     Toggle(isOn: Binding(get: { values[input.name] == "true" }, set: { values[input.name] = $0 ? "true" : "false" })) {
                         label(input)
                     }
-                    .tint(.white)
+                    .tint(Color.glassInk)
                 case "choice":
                     label(input)
                     GlassTextFieldSurface {
@@ -152,7 +151,7 @@ struct DispatchInputsForm: View {
                             ForEach(input.options, id: \.self) { Text($0).tag($0) }
                         }
                         .pickerStyle(.menu)
-                        .tint(.white)
+                        .tint(Color.glassInk)
                     }
                 default:
                     label(input)
