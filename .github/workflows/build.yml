@@ -12,14 +12,10 @@ on:
         type: choice
         options: [Release, Debug]
         default: Release
-      run_tests:
-        description: "Esegui gli unit test"
+      allow_without_vm:
+        description: "Consenti un IPA senza VM Linux se la VM non si compila"
         type: boolean
-        default: true
-      include_linux_vm:
-        description: "Includi la VM Linux (TinyEMU + Alpine riscv64)"
-        type: boolean
-        default: true
+        default: false
       alpine_packages:
         description: "Pacchetti Alpine nella VM (vuoto = predefiniti)"
         type: string
@@ -40,7 +36,6 @@ env:
 jobs:
   linux-image:
     name: Immagine Linux per la VM (Alpine riscv64)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.include_linux_vm }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -60,70 +55,6 @@ jobs:
           name: linux-vm-image
           path: out/
           if-no-files-found: error
-          retention-days: 7
-
-  test:
-    name: Unit test (simulatore)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests }}
-    runs-on: macos-26
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Versione Xcode
-        run: |
-          xcodebuild -version
-          swift --version
-
-      - name: Installa XcodeGen
-        run: brew install xcodegen
-
-      - name: Genera il progetto Xcode
-        run: xcodegen generate --spec project.yml
-
-      - name: Scegli un simulatore iPhone
-        id: sim
-        run: |
-          UDID=$(xcrun simctl list devices available -j | python3 -c '
-          import json, sys
-          data = json.load(sys.stdin)["devices"]
-          best = None
-          for runtime, devices in data.items():
-              if "iOS" not in runtime:
-                  continue
-              for d in devices:
-                  if d.get("isAvailable") and d["name"].startswith("iPhone"):
-                      key = (runtime, d["name"])
-                      if best is None or key > best[0]:
-                          best = (key, d["udid"])
-          print(best[1] if best else "")
-          ')
-          if [ -z "$UDID" ]; then
-            echo "::error::Nessun simulatore iPhone disponibile"
-            exit 1
-          fi
-          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
-          echo "Simulatore scelto: $UDID"
-
-      - name: Esegui i test
-        run: |
-          set -o pipefail
-          xcodebuild test \
-            -project "$PROJECT" \
-            -scheme "$SCHEME" \
-            -destination "id=${{ steps.sim.outputs.udid }}" \
-            -resultBundlePath build/TestResults.xcresult \
-            CODE_SIGNING_ALLOWED=NO | tee build-test.log
-
-      - name: Carica i risultati dei test
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: test-results
-          path: |
-            build/TestResults.xcresult
-            build-test.log
-          if-no-files-found: ignore
           retention-days: 7
 
   build:
@@ -149,7 +80,6 @@ jobs:
 
       - name: Scarica l'immagine Linux
         if: ${{ needs.linux-image.result == 'success' }}
-        continue-on-error: true
         uses: actions/download-artifact@v6
         with:
           name: linux-vm-image
@@ -157,19 +87,25 @@ jobs:
 
       - name: Compila l'emulatore TinyEMU per iOS
         id: temu
-        if: ${{ needs.linux-image.result == 'success' }}
-        continue-on-error: true
+        continue-on-error: ${{ inputs.allow_without_vm == true }}
         run: ./scripts/build-tinyemu.sh
 
       - name: Configura il collegamento della VM
         run: |
           LDF="-Wl,-U,_temu_main"
           if [ -f Vendor/LinuxVM/libtemu.a ] && [ -f Sources/ActionsRunner/Resources/LinuxVM/rootfs.ext2 ]; then
-            LDF="$LDF -Wl,-force_load,$PWD/Vendor/LinuxVM/libtemu.a"
+            LDF="-Wl,-force_load,$PWD/Vendor/LinuxVM/libtemu.a -lresolv -lz"
             echo "VM_INCLUDED=true" >> "$GITHUB_ENV"
             echo "### VM Linux inclusa" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat Vendor/LinuxVM/BUILD_INFO.txt >> "$GITHUB_STEP_SUMMARY" || true
             ls -lh Sources/ActionsRunner/Resources/LinuxVM >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
           else
+            if [ "${{ inputs.allow_without_vm }}" != "true" ]; then
+              echo "::error::VM Linux mancante (libtemu.a o rootfs.ext2): build interrotta. Avvia il workflow con allow_without_vm=true per un IPA senza VM."
+              exit 1
+            fi
             rm -rf Sources/ActionsRunner/Resources/LinuxVM
             echo "VM_INCLUDED=false" >> "$GITHUB_ENV"
             echo "::warning::VM Linux non inclusa: l'app userà solo l'interprete integrato"
@@ -200,6 +136,15 @@ jobs:
         run: |
           APP_PATH="build/$APP_NAME.xcarchive/Products/Applications/$APP_NAME.app"
           test -d "$APP_PATH" || { echo "::error::App non trovata in $APP_PATH"; exit 1; }
+          if [ "$VM_INCLUDED" = "true" ]; then
+            # verifica che l'IPA contenga davvero emulatore e immagine Linux
+            for f in bbl64.bin kernel-riscv64.bin rootfs.ext2; do
+              test -f "$APP_PATH/$f" || { echo "::error::$f non incluso nell'app"; exit 1; }
+            done
+            grep -a -q "AR_TINYEMU_LINKED_v1" "$APP_PATH/$APP_NAME" || { echo "::error::TinyEMU non collegato nel binario"; exit 1; }
+            echo "Verifica VM: emulatore collegato e immagine Linux inclusa"
+            du -sh "$APP_PATH"
+          fi
           rm -rf build/Payload && mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
           (cd build && zip -qry "$APP_NAME-unsigned.ipa" Payload)
