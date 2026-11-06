@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct SettingsView: View {
     @Environment(AppSettings.self) private var settings
@@ -86,6 +87,16 @@ struct VMStatusView: View {
                 Section("Pacchetti Alpine inclusi (\(packages.count))") {
                     Text(packages.joined(separator: " ")).font(.caption.monospaced())
                 }
+            }
+            Section {
+                Button("Copia la console di avvio", systemImage: "doc.on.doc") {
+                    UIPasteboard.general.string = vm.bootLog.joined(separator: "\n")
+                }
+                .disabled(vm.bootLog.isEmpty)
+                ShareLink(item: vm.bootLog.joined(separator: "\n")) {
+                    Label("Condividi la console di avvio", systemImage: "square.and.arrow.up")
+                }
+                .disabled(vm.bootLog.isEmpty)
             }
             Section("Console di avvio") {
                 ForEach(Array(vm.bootLog.suffix(400).enumerated()), id: \.offset) { _, l in

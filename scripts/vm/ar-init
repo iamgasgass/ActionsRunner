@@ -16,11 +16,27 @@ $BB mount -t tmpfs tmpfs /dev/shm 2>/dev/null
 $BB hostname -F /etc/hostname 2>/dev/null
 echo "__AR_STAGE__ filesystem"
 
+# Cartella condivisa (virtio-9p). Opzioni identiche all'uso documentato da TinyEMU: niente msize
+# grande (con Linux 4.15 + TinyEMU un msize di 256 KB manda in errore il client 9p del kernel).
+# Ogni tentativo gira in background con un limite di tempo: un montaggio bloccato non deve
+# impedire all'agente di avviarsi (l'app riceve 9p=0 e mostra un errore chiaro).
+mount9p() {
+  $BB mount -t 9p -o "$1" hostfs /mnt/host &
+  p=$!
+  i=0
+  while [ $i -lt 40 ]; do
+    if ! $BB kill -0 $p 2>/dev/null; then wait $p; return $?; fi
+    $BB sleep 1
+    i=$((i + 1))
+  done
+  echo "mount 9p ($1): nessuna risposta dopo 40 s"
+  return 1
+}
+echo "__AR_STAGE__ cartella condivisa"
 NINEP=0
-if $BB mount -t 9p -o trans=virtio,version=9p2000.L,msize=262144 hostfs /mnt/host 2>/dev/null \
-   || $BB mount -t 9p -o trans=virtio,version=9p2000.L hostfs /mnt/host; then
-  NINEP=1
-fi
+for opts in trans=virtio,version=9p2000.L trans=virtio; do
+  if mount9p "$opts"; then NINEP=1; break; fi
+done
 
 echo "__AR_STAGE__ rete"
 $BB ip link set lo up 2>/dev/null

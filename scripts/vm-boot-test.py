@@ -17,6 +17,8 @@ STALL_TIMEOUT = int(os.environ.get("STALL_TIMEOUT", "300"))
 RUN_TIMEOUT = int(os.environ.get("RUN_TIMEOUT", "900"))
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 summary = []
+kernel_errors = []
+KERNEL_ERR = re.compile(r"---\[ end trace|Unable to handle kernel|BUG: |Oops|WARNING: CPU|INFO: task .* blocked")
 t0 = time.time()
 
 proc = subprocess.Popen([temu, cfg], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -35,6 +37,8 @@ def reader():
             raw, buf = buf.split(b"\n", 1)
             line = ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r"))
             print(f"[{time.time() - t0:7.1f}s] {line}", flush=True)
+            if KERNEL_ERR.search(line):
+                kernel_errors.append(line.strip())
             lines.put(line)
     if buf:
         lines.put(buf.decode("utf-8", "replace"))
@@ -134,6 +138,9 @@ def run(name, script, timeout=RUN_TIMEOUT):
     return rc, out, time.time() - t
 
 
+if kernel_errors:
+    fail("errori del kernel durante l'avvio: " + " | ".join(kernel_errors[:3]))
+
 # 2. controlli essenziali (devono passare)
 rc, out, dt = run("core", r"""
 set -e
@@ -172,6 +179,8 @@ for name, script in [
         print(f"::warning::controllo {name} non riuscito (exit {rc})", flush=True)
         summary.append(f"⚠️ {name}: exit {rc} — {' | '.join(out[-3:])}")
 
+if kernel_errors:
+    fail("errori del kernel durante i comandi: " + " | ".join(kernel_errors[:3]))
 write_summary()
 proc.kill()
 print(f"Collaudo della VM superato (avvio {boot_s:.1f} s)")
