@@ -68,66 +68,88 @@ enum Format {
     }()
 }
 
-/// Vista log con gruppi comprimibili (come ##[group] su GitHub).
-struct LogLinesView: View {
-    let lines: [LogLine]
-    @State private var expanded: Set<Int> = []
+/// Log "appiattito" in righe singole, da inserire DIRETTAMENTE in un LazyVStack:
+/// niente contenitori annidati né effetti vetro su viste alte migliaia di punti
+/// (causa di altezze stimate male, testo che sborda e schede vuote).
+enum LogPanel {
+    enum Item: Identifiable {
+        case line(LogLine, indent: Bool)
+        case group(LogLine, expanded: Bool)
 
-    private struct Block: Identifiable {
-        let id: Int
-        let title: LogLine?
-        var lines: [LogLine]
+        var id: Int {
+            switch self {
+            case .line(let l, _): return l.id
+            case .group(let l, _): return l.id
+            }
+        }
     }
 
-    private var blocks: [Block] {
-        var out: [Block] = []
-        var current: Block? = nil
-        var loose: [LogLine] = []
-        func flushLoose() {
-            if !loose.isEmpty { out.append(Block(id: loose[0].id, title: nil, lines: loose)); loose = [] }
-        }
+    /// Righe visibili: i gruppi ##[group] chiusi nascondono il loro contenuto.
+    static func items(_ lines: [LogLine], expandedGroups: Set<Int>) -> [Item] {
+        var out: [Item] = []
+        out.reserveCapacity(lines.count)
+        var openGroup: Int?
         for l in lines {
             switch l.kind {
             case .groupStart:
-                if let c = current { out.append(c) }
-                flushLoose()
-                current = Block(id: l.id, title: l, lines: [])
+                openGroup = l.id
+                out.append(.group(l, expanded: expandedGroups.contains(l.id)))
             case .groupEnd:
-                if let c = current { out.append(c); current = nil }
+                openGroup = nil
             default:
-                if current != nil { current!.lines.append(l) } else { loose.append(l) }
-            }
-        }
-        if let c = current { out.append(c) }
-        flushLoose()
-        return out
-    }
-
-    var body: some View {
-        LazyVStack(alignment: .leading, spacing: 1) {
-            ForEach(blocks) { block in
-                if let title = block.title {
-                    Button {
-                        if expanded.contains(block.id) { expanded.remove(block.id) } else { expanded.insert(block.id) }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: expanded.contains(block.id) ? "chevron.down" : "chevron.right")
-                                .font(.caption2)
-                            Text(title.text).lineLimit(1)
-                        }
-                        .font(.system(.footnote, design: .monospaced))
-                        .foregroundStyle(.primary)
-                    }
-                    .buttonStyle(.plain)
-                    if expanded.contains(block.id) {
-                        ForEach(block.lines) { LogLineRow(line: $0).padding(.leading, 14) }
-                    }
+                if let g = openGroup {
+                    if expandedGroups.contains(g) { out.append(.line(l, indent: true)) }
                 } else {
-                    ForEach(block.lines) { LogLineRow(line: $0) }
+                    out.append(.line(l, indent: false))
                 }
             }
         }
-        .textSelection(.enabled)
+        return out
+    }
+}
+
+/// Una riga del pannello log: sfondo leggero continuo, angoli arrotondati solo alla prima e all'ultima.
+struct LogPanelRow: View {
+    let item: LogPanel.Item
+    let isFirst: Bool
+    let isLast: Bool
+    let onToggleGroup: (Int) -> Void
+
+    var body: some View {
+        content
+            .padding(.horizontal, 12)
+            .padding(.top, isFirst ? 10 : 0)
+            .padding(.bottom, isLast ? 10 : 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                UnevenRoundedRectangle(topLeadingRadius: isFirst ? 16 : 0, bottomLeadingRadius: isLast ? 16 : 0,
+                                       bottomTrailingRadius: isLast ? 16 : 0, topTrailingRadius: isFirst ? 16 : 0,
+                                       style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+            }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch item {
+        case .line(let l, let indent):
+            LogLineRow(line: l)
+                .padding(.leading, indent ? 14 : 0)
+                .textSelection(.enabled)
+        case .group(let l, let expanded):
+            Button { onToggleGroup(l.id) } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2)
+                    Text(l.text).lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .font(.system(.footnote, design: .monospaced))
+                .foregroundStyle(.primary)
+                .padding(.vertical, 2)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
     }
 }
 

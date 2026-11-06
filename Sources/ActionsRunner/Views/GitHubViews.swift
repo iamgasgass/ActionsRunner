@@ -733,68 +733,57 @@ struct CloudJobRow: View {
 struct CloudJobView: View {
     let job: CloudJobModel
     @State private var expanded: Set<Int> = []
+    @State private var expandedGroups: Set<Int> = []
     @State private var showFull = false
 
     var body: some View {
-        GlassScreen(spacing: 12) {
-            logStateBanner
+        ZStack {
+            AppGlassBackground()
 
-            let steps = job.job.steps ?? []
-            if steps.isEmpty || showFull {
-                LogLinesView(lines: job.fullLog)
-                    .glassInset()
-            } else {
-                ForEach(steps, id: \.number) { step in
-                    VStack(alignment: .leading, spacing: 10) {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                if expanded.contains(step.number) { expanded.remove(step.number) } else { expanded.insert(step.number) }
-                            }
-                        } label: {
-                            HStack(spacing: 10) {
-                                StatusIcon(api: step.status, conclusion: step.conclusion, size: 15)
-                                Text(step.name)
-                                    .font(.system(.subheadline, design: .rounded, weight: .medium))
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.leading)
-                                Spacer(minLength: 4)
-                                if step.startedAt != nil {
-                                    Text(Format.apiDuration(step.startedAt, step.completedAt))
-                                        .font(.caption.monospacedDigit())
-                                        .foregroundStyle(.secondary)
+            ScrollView {
+                // Un unico LazyVStack: intestazioni degli step e righe di log sono figli diretti,
+                // così l'altezza è sempre esatta e le righe vengono create solo quando visibili.
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    logStateBanner
+                        .padding(.bottom, 12)
+
+                    let steps = job.job.steps ?? []
+                    if steps.isEmpty || showFull {
+                        logRows(job.fullLog)
+                    } else {
+                        ForEach(steps, id: \.number) { step in
+                            stepHeader(step)
+                                .padding(.bottom, 10)
+                            if expanded.contains(step.number) {
+                                let lines = job.stepLogs[step.number] ?? []
+                                if lines.isEmpty {
+                                    Text(step.status == "completed" ? "Nessuna riga di log per questo step." : "Log non ancora disponibili.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .padding(.horizontal, 4)
+                                        .padding(.bottom, 12)
+                                } else {
+                                    logRows(lines)
+                                    Color.clear.frame(height: 14)
                                 }
-                                Image(systemName: expanded.contains(step.number) ? "chevron.up" : "chevron.down")
-                                    .font(.caption.weight(.bold))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        if expanded.contains(step.number) {
-                            let lines = job.stepLogs[step.number] ?? []
-                            if lines.isEmpty {
-                                Text(step.status == "completed" ? "Nessuna riga di log per questo step." : "Log non ancora disponibili.")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            } else {
-                                LogLinesView(lines: lines)
-                                    .glassInset()
                             }
                         }
                     }
-                    .glassRow()
-                }
-            }
 
-            if !job.annotations.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    GlassSectionHeading(title: "Annotazioni", subtitle: nil, symbol: "exclamationmark.bubble")
-                    ForEach(Array(job.annotations.enumerated()), id: \.offset) { _, a in
-                        AnnotationRow(level: a.annotationLevel ?? "notice", title: a.title, message: a.message ?? "",
-                                      location: [a.path, a.startLine.map { "riga \($0)" }].compactMap { $0 }.joined(separator: " · "))
+                    if !job.annotations.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            GlassSectionHeading(title: "Annotazioni", subtitle: nil, symbol: "exclamationmark.bubble")
+                            ForEach(Array(job.annotations.enumerated()), id: \.offset) { _, a in
+                                AnnotationRow(level: a.annotationLevel ?? "notice", title: a.title, message: a.message ?? "",
+                                              location: [a.path, a.startLine.map { "riga \($0)" }].compactMap { $0 }.joined(separator: " · "))
+                            }
+                        }
+                        .glassSection()
+                        .padding(.top, 8)
                     }
                 }
-                .glassSection()
+                .padding(.horizontal, 18)
+                .padding(.top, 12)
+                .padding(.bottom, 36)
             }
         }
         .navigationTitle(job.job.name)
@@ -815,6 +804,43 @@ struct CloudJobView: View {
         .onAppear {
             if let failed = job.job.steps?.first(where: { $0.conclusion == "failure" }) { expanded.insert(failed.number) }
             else if let running = job.job.steps?.last(where: { $0.status == "in_progress" }) { expanded.insert(running.number) }
+        }
+    }
+
+    private func stepHeader(_ step: GHStep) -> some View {
+        Button {
+            // senza animazione: espandere migliaia di righe animate causa sovrapposizioni
+            if expanded.contains(step.number) { expanded.remove(step.number) } else { expanded.insert(step.number) }
+        } label: {
+            HStack(spacing: 10) {
+                StatusIcon(api: step.status, conclusion: step.conclusion, size: 15)
+                Text(step.name)
+                    .font(.system(.subheadline, design: .rounded, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 4)
+                if step.startedAt != nil {
+                    Text(Format.apiDuration(step.startedAt, step.completedAt))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Image(systemName: expanded.contains(step.number) ? "chevron.up" : "chevron.down")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.tertiary)
+            }
+            .glassRow()
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Righe del log come figli diretti del LazyVStack.
+    @ViewBuilder private func logRows(_ lines: [LogLine]) -> some View {
+        let items = LogPanel.items(lines, expandedGroups: expandedGroups)
+        ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
+            LogPanelRow(item: item, isFirst: idx == 0, isLast: idx == items.count - 1) { id in
+                if expandedGroups.contains(id) { expandedGroups.remove(id) } else { expandedGroups.insert(id) }
+            }
         }
     }
 
