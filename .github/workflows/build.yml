@@ -132,7 +132,7 @@ jobs:
             <key>teamID</key><string>$TEAM_ID</string>
             <key>signingStyle</key><string>manual</string>
             <key>provisioningProfiles</key>
-            <dict><key>com.actionsrunner.app</key><string>$PROFILE_UUID</string></dict>
+            <dict><key>com.iamgasgass.actionsrunner</key><string>$PROFILE_UUID</string></dict>
           </dict>
           </plist>
           EOF
