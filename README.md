@@ -57,17 +57,27 @@ ancora in cache, come fa il runner di GitHub. Dopo il primo download funzionano 
 ## Costruire l'app (GitHub Actions)
 
 1. Carica questa repository su GitHub.
-2. Il workflow `.github/workflows/build.yml`:
+2. Il workflow `.github/workflows/build.yml` ha due job:
    - **linux-image** (Ubuntu): scarica kernel e firmware di TinyEMU e crea il rootfs Alpine riscv64
-     (`scripts/build-linux-image.sh`, pacchetti personalizzabili con l'input `alpine_packages`);
-   - **test** (macOS 26): genera il progetto con XcodeGen ed esegue gli unit test;
-   - **build** (macOS 26): compila TinyEMU per iOS (`scripts/build-tinyemu.sh`), include l'immagine Linux
-     nell'app e produce l'**IPA non firmato** (artifact `ActionsRunner-unsigned-ipa`).
-     Se la VM non si compila, l'IPA viene prodotto comunque con il solo interprete integrato
-     (vedi il riepilogo della run).
-3. Installa l'IPA con AltStore, SideStore, Sideloadly o TrollStore.
-4. Opzionale: IPA firmato con i secrets `BUILD_CERTIFICATE_BASE64`, `P12_PASSWORD`,
+     (`scripts/build-linux-image.sh`; pacchetti personalizzabili con l'input `alpine_packages`);
+   - **build** (macOS 26): compila TinyEMU per iOS (`scripts/build-tinyemu.sh`: fork
+     `fernandotcl/TinyEMU` con supporto iOS nativo, ripiego automatico sul sorgente originale),
+     include l'immagine Linux, archivia l'app e produce l'**IPA non firmato**
+     (artifact `ActionsRunner-unsigned-ipa`).
+3. La VM è **obbligatoria**: se l'emulatore o l'immagine non sono disponibili la build fallisce, e prima
+   di creare l'IPA viene verificato che `rootfs.ext2`, kernel, firmware ed emulatore siano davvero
+   dentro l'app. Per un IPA senza VM avvia il workflow a mano con `allow_without_vm: true`.
+4. Installa l'IPA con AltStore, SideStore, Sideloadly o TrollStore.
+5. Opzionale: IPA firmato con i secrets `BUILD_CERTIFICATE_BASE64`, `P12_PASSWORD`,
    `BUILD_PROVISION_PROFILE_BASE64`; un tag `v*` pubblica una Release.
+
+Gli unit test (`Tests/ActionsRunnerTests`) non fanno parte della CI; si eseguono da Xcode (⌘U).
+
+### Compatibilità con i workflow per Ubuntu
+
+Nella VM sono presenti `sudo` (esegue direttamente il comando: si è già root), `apt-get`/`apt`
+(traducono `install`/`update` in `apk`, con i nomi dei pacchetti più comuni convertiti) e `brew`
+(installa con `apk` o spiega l'alternativa).
 
 ### In locale su un Mac
 
@@ -77,8 +87,8 @@ brew install xcodegen
 mkdir -p Sources/ActionsRunner/Resources/LinuxVM && cp out/* Sources/ActionsRunner/Resources/LinuxVM/
 ./scripts/build-tinyemu.sh
 xcodegen generate
-xcodebuild -project ActionsRunner.xcodeproj -scheme ActionsRunner \
-  OTHER_LDFLAGS="-Wl,-U,_temu_main -Wl,-force_load,$PWD/Vendor/LinuxVM/libtemu.a" build
+xcodebuild -project ActionsRunner.xcodeproj -scheme ActionsRunner -sdk iphoneos \
+  OTHER_LDFLAGS="-Wl,-force_load,$PWD/Vendor/LinuxVM/libtemu.a -lresolv -lz" build
 ```
 
 ## Struttura
@@ -90,8 +100,9 @@ scripts/
   build-linux-image.sh          kernel + bbl + rootfs Alpine riscv64 (ext2)
   linux-rootfs.sh               creazione del rootfs (eseguito in un container Alpine)
   build-tinyemu.sh              TinyEMU → libtemu.a per iOS (+ verifica di collegamento)
-  tinyemu-ios/                  adattamenti per compilare TinyEMU su iOS
+  tinyemu-ios/                  adattamenti per il sorgente originale di TinyEMU
   vm/ar-init, vm/ar-agent       init e agente della VM (protocollo sulla console)
+  vm/compat/                    sudo, apt-get/apt, brew per i workflow scritti per Ubuntu
 Sources/ActionsRunner/
   Core/        JSONValue ordinato, parser YAML
   Workflow/    modello e validazione dei workflow
@@ -101,10 +112,10 @@ Sources/ActionsRunner/
   VM/          bridge C verso TinyEMU e gestione della VM
   Storage/     progetti, impostazioni, ZIP
   Views/       interfaccia (progetti, esecuzioni, terminale Linux, impostazioni)
-Tests/ActionsRunnerTests/       test di YAML, ZIP, espressioni, matrix, shell, integrazione
+Tests/ActionsRunnerTests/       test (Xcode) di YAML, ZIP, espressioni, matrix, shell, integrazione
 ```
 
 ## Licenze di terze parti incluse nella build
 
-- TinyEMU © Fabrice Bellard — licenza MIT (slirp: licenza BSD).
+- TinyEMU © Fabrice Bellard, port macOS/iOS di Fernando Lemos — licenza MIT (slirp: licenza BSD).
 - Kernel Linux (GPLv2) e pacchetti Alpine Linux (licenze dei rispettivi progetti) nell'immagine della VM.

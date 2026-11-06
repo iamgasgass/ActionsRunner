@@ -42,7 +42,7 @@ struct BuiltinResult {
 }
 
 enum BuiltinActions {
-    /// Setup di toolchain: su iOS non c'è nulla da installare, lo step viene emulato.
+    /// Setup di toolchain: niente download (binari x86/arm64 per Ubuntu/macOS); si usa la toolchain della VM Linux.
     static let toolchainSetups: [String: (input: String, output: String)] = [
         "actions/setup-node": ("node-version", "node-version"),
         "actions/setup-python": ("python-version", "python-version"),
@@ -393,7 +393,7 @@ enum BuiltinActions {
         } else {
             c.warning("'\(c.ref.raw)' emulato: nessuna toolchain installabile (\(version.isEmpty ? "versione predefinita" : version)).")
         }
-        onMain { c.model.note = "Emulato" }
+        onMain { c.model.note = LinuxVM.shared.isSupported ? "Toolchain della VM" : "Emulato" }
         var out = OrderedObject()
         out[spec.output] = .string(version.isEmpty ? "emulated" : version)
         if c.ref.key == "actions/setup-node" || c.ref.key == "actions/setup-python" { out["cache-hit"] = .string("false") }

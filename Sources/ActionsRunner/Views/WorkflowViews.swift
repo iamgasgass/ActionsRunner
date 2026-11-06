@@ -173,7 +173,7 @@ struct LocalRunConfigView: View {
                         .font(.caption).foregroundStyle(.orange)
                 }
                 if workflow.triggers[event] == nil {
-                    Label("Il workflow non dichiara '\(event)': su GitHub non verrebbe avviato.", systemImage: "exclamationmark.triangle")
+                    Label("Il workflow non dichiara '\(event)': GitHub non lo avvierebbe per questo evento. Verrà eseguito comunque.", systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.orange)
                 }
             }

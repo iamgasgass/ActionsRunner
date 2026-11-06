@@ -15,6 +15,9 @@ for p in $PKGS; do
 done
 install -m 755 $W/scripts/vm/ar-init  "$R/sbin/ar-init"
 install -m 755 $W/scripts/vm/ar-agent "$R/sbin/ar-agent"
+mkdir -p "$R/usr/local/bin"
+for c in sudo apt-get brew; do install -m 755 "$W/scripts/vm/compat/$c" "$R/usr/local/bin/$c"; done
+ln -sf apt-get "$R/usr/local/bin/apt"
 printf '%s/main\n%s/community\n' "$REPO" "$REPO" > "$R/etc/apk/repositories"
 echo actionsrunner > "$R/etc/hostname"
 mkdir -p "$R/home/runner" "$R/mnt/host" "$R/root"

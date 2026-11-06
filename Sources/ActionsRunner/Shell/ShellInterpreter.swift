@@ -332,7 +332,7 @@ final class ShellInterpreter {
             let shebang = text.prefix { $0 != "\n" }
             let ok = ["bash", "/sh", " sh", "zsh", "dash", "ksh"].contains { shebang.contains($0) }
             if !ok {
-                io.stderr.write("\(path): interprete '\(shebang.dropFirst(2))' non disponibile su iOS. Usa l'esecuzione su GitHub per questo step.\n")
+                io.stderr.write("\(path): l'interprete '\(shebang.dropFirst(2))' non è disponibile nell'interprete integrato: esegui lo step nella VM Linux (Impostazioni → Esecuzione degli step).\n")
                 return 126
             }
         }

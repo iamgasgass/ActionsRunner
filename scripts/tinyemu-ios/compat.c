@@ -11,3 +11,6 @@ void ar_temu_exit(int code) {
 }
 
 int ar_unavailable(void) { return -1; }
+
+/* Marcatore usato dalla CI per verificare che l'emulatore sia collegato nell'IPA. */
+__attribute__((used)) const char ar_tinyemu_marker[] = "AR_TINYEMU_LINKED_v1";

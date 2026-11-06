@@ -13,7 +13,6 @@ enum AppPaths {
     static var localRuns: URL { ensure(caches.appendingPathComponent("Runs", isDirectory: true)) }
     static var actionsCache: URL { ensure(caches.appendingPathComponent("Actions", isDirectory: true)) }
     static var cacheStore: URL { ensure(caches.appendingPathComponent("ActionsCache", isDirectory: true)) }
-    static var cloudArtifacts: URL { ensure(documents.appendingPathComponent("Artifacts", isDirectory: true)) }
     static var exports: URL { ensure(documents.appendingPathComponent("Export", isDirectory: true)) }
     static var temp: URL { ensure(fm.temporaryDirectory.appendingPathComponent("ActionsRunner", isDirectory: true)) }
 

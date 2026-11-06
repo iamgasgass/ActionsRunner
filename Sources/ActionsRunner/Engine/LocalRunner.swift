@@ -516,13 +516,19 @@ final class LocalWorkflowRunner {
         else { exec.runnerOS = "Linux"; exec.runnerArch = lower.contains("arm") ? "ARM64" : "X64" }
         onMain { jm.runsOn = label }
 
-        slog("Current runner version: '2.329.0' (emulato da ActionsRunner per iOS)")
+        slog("Current runner version: '2.329.0' (ActionsRunner per iOS)")
         slog("Runner name: 'ActionsRunner iOS'")
         slog("Machine name: '\(UIDeviceInfo.name)'")
         slog("Etichetta richiesta (runs-on): \(label)", .info)
         emit(setup, "Runner Image", .groupStart)
-        slog("Image: emulazione \(exec.runnerOS) \(exec.runnerArch) — interprete bash integrato, nessun processo esterno")
-        slog("Gli strumenti di sistema (xcodebuild, node, python, docker...) non sono disponibili su iOS.")
+        if options.shellEngine != .builtin && LinuxVM.shared.isSupported {
+            slog("Image: VM Linux integrata (TinyEMU RISC-V 64 + Alpine Linux) — runner.os: \(exec.runnerOS)")
+            if exec.runnerOS != "Linux" {
+                slog("runs-on '\(label)' richiede \(exec.runnerOS): gli step verranno eseguiti nella VM Linux; gli strumenti specifici di \(exec.runnerOS) (es. xcodebuild) non esistono.", .warning)
+            }
+        } else {
+            slog("Image: interprete bash integrato (Swift) — runner.os: \(exec.runnerOS)")
+        }
         emit(setup, "", .groupEnd)
         if let perms = job.permissions ?? workflow.permissions {
             emit(setup, "GITHUB_TOKEN Permissions", .groupStart)
@@ -531,7 +537,7 @@ final class LocalWorkflowRunner {
         }
         slog("Secret source: Actions")
         slog("Prepare workflow directory")
-        if job.container != nil { slog("'container' richiede Docker: ignorato nel runner iOS (gli step girano direttamente nell'interprete).", .warning) }
+        if job.container != nil { slog("'container' richiede Docker, che non può girare nell'app: gli step vengono eseguiti senza container.", .warning) }
         if job.services != nil { slog("'services' richiede Docker: i container di servizio non verranno avviati.", .warning) }
         if let envName = job.environment {
             slog("Environment: \((try? ExpressionTemplate.evaluateDeep(envName, pre).stringValue) ?? envName.stringValue) (le regole di protezione non sono emulate)", .info)
@@ -1037,7 +1043,7 @@ final class LocalWorkflowRunner {
             emit(sm, "Run \(script.split(separator: "\n").first ?? "")", .groupStart)
             emit(sm, script, .command)
             emit(sm, "", .groupEnd)
-            emit(sm, "##[error]La shell '\(shellName)' non è disponibile nel runner iOS (supportate: bash, sh). Usa \"Esegui su GitHub\" per questo step.", .error)
+            emit(sm, "##[error]La shell '\(shellName)' non è disponibile nell'interprete integrato (supportate: bash, sh). Esegui lo step nella VM Linux (Impostazioni → Esecuzione degli step), che supporta anche python, node e shell personalizzate.", .error)
             return (false, OrderedObject())
         }
 
@@ -1140,7 +1146,7 @@ final class LocalWorkflowRunner {
 
         switch ref.kind {
         case .docker(let image):
-            emit(sm, "##[error]Le azioni Docker (docker://\(image)) richiedono un runner con Docker. Usa \"Esegui su GitHub\".", .error)
+            emit(sm, "##[error]Le azioni Docker (docker://\(image)) richiedono Docker, che non può girare dentro l'app.", .error)
             return unsupported(sm)
 
         case .local(let path):
@@ -1175,7 +1181,7 @@ final class LocalWorkflowRunner {
     private func unsupported(_ sm: StepRunModel) -> (Bool, OrderedObject) {
         if options.unsupportedActions == .skip {
             emit(sm, "Warning: azione non supportata in locale: saltata come da impostazioni.", .warning)
-            onMain { sm.note = "Saltato (non supportato su iOS)" }
+            onMain { sm.note = "Saltato (non eseguibile nell'app)" }
             return (true, OrderedObject())
         }
         onMain { sm.note = "Richiede un runner reale" }

@@ -1,0 +1,35 @@
+#!/bin/sh
+# Compatibilità con i workflow per Ubuntu: traduce apt-get/apt in apk (Alpine).
+# I nomi dei pacchetti Alpine coincidono spesso con quelli Debian; quelli diversi vengono segnalati.
+cmd=""
+pkgs=""
+for a in "$@"; do
+  case "$a" in
+    -*|*=*) ;;
+    update|upgrade|install|remove|purge|autoremove|clean|dist-upgrade|full-upgrade) [ -z "$cmd" ] && cmd="$a" ;;
+    *) pkgs="$pkgs $a" ;;
+  esac
+done
+case "$cmd" in
+  update) exec apk update ;;
+  upgrade|dist-upgrade|full-upgrade) exec apk upgrade ;;
+  install)
+    rc=0
+    for p in $pkgs; do
+      case "$p" in
+        build-essential) q=build-base ;;
+        python3-pip) q=py3-pip ;;
+        python3-venv|python3-dev) q=python3-dev ;;
+        libssl-dev) q=openssl-dev ;;
+        pkg-config) q=pkgconf ;;
+        zlib1g-dev) q=zlib-dev ;;
+        libffi-dev) q=libffi-dev ;;
+        *) q="$p" ;;
+      esac
+      apk add --no-cache "$q" || { echo "apt-get (apk): pacchetto '$p' non trovato in Alpine riscv64"; rc=100; }
+    done
+    exit $rc ;;
+  remove|purge|autoremove) [ -n "$pkgs" ] && exec apk del $pkgs; exit 0 ;;
+  clean) exit 0 ;;
+  *) echo "apt-get (compatibilità Alpine): comando '$cmd' non supportato"; exit 0 ;;
+esac

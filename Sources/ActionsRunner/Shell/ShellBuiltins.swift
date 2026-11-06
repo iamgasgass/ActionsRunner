@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 
 /// Comandi integrati dell'interprete. Su iOS non è possibile eseguire processi esterni
-/// (fork/exec sono vietati dalla sandbox), quindi i comandi Unix più usati negli script CI
+/// (fork/exec sono vietati dalla sandbox): quando la VM Linux non è in uso, i comandi Unix più usati negli script CI
 /// sono reimplementati qui in Swift.
 enum ShellBuiltins {
     static let implemented: Set<String> = [
@@ -28,10 +28,20 @@ enum ShellBuiltins {
         "ditto", "hdiutil", "pkgbuild", "productbuild", "notarytool", "altool", "xcpretty", "xcbeautify", "jarsigner"
     ]
 
+    static let macOnlyTools: Set<String> = [
+        "xcodebuild", "xcrun", "xcode-select", "security", "codesign", "plutil", "agvtool", "simctl", "lipo", "ditto",
+        "hdiutil", "pkgbuild", "productbuild", "notarytool", "altool", "sw_vers", "swiftc", "xcodegen", "pod", "carthage"
+    ]
+
     static func notFoundMessage(_ name: String) -> String {
+        if macOnlyTools.contains(name) {
+            return "\(name): strumento disponibile solo su macOS con Xcode: non esiste né per iOS né per Linux, quindi non può essere eseguito in questa app.\n"
+        }
         if realRunnerTools.contains(name) {
-            return "\(name): comando non disponibile nel runner iOS (la sandbox di iOS non consente processi esterni). " +
-                "Esegui il workflow con \"Esegui su GitHub\" per usare un runner reale.\n"
+            if LinuxVM.shared.isSupported {
+                return "\(name): comando non disponibile nell'interprete integrato. Imposta \"Esecuzione degli step\" su \"Automatico\" o \"Solo VM Linux\" (Impostazioni) per eseguirlo nella VM Linux; se manca anche lì, installalo nello step con 'apk add'.\n"
+            }
+            return "\(name): comando non disponibile nell'interprete integrato e questa build non include la VM Linux (vedi il riepilogo della build).\n"
         }
         return "bash: \(name): comando non trovato\n"
     }

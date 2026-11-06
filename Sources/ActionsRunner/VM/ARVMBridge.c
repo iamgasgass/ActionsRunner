@@ -13,6 +13,14 @@ extern int temu_main(int argc, char **argv) __attribute__((weak_import));
 static char *g_argv[4];
 static int g_started = 0;
 
+/* Richiesto da temu.c del fork TinyEMU quando compilato per iOS (TARGET_OS_IPHONE):
+   dimensioni della console virtuale (colonne x righe). */
+void console_get_size(void *opaque, int *pw, int *ph) {
+    (void)opaque;
+    if (pw) *pw = 120;
+    if (ph) *ph = 40;
+}
+
 int ar_vm_available(void) {
     return temu_main != NULL ? 1 : 0;
 }

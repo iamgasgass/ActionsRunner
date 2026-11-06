@@ -1,0 +1,14 @@
+#!/bin/sh
+# Homebrew esiste solo per macOS/Linux x86_64 e arm64: nella VM (Alpine riscv64) si usa apk.
+if [ "$1" = "install" ]; then
+  shift
+  rc=0
+  for p in "$@"; do
+    case "$p" in -*) continue ;; esac
+    apk add --no-cache "$p" || { echo "brew (apk): '$p' non disponibile in Alpine riscv64"; rc=1; }
+  done
+  exit $rc
+fi
+echo "brew: Homebrew non è disponibile nella VM Linux (Alpine riscv64); usa 'apk add <pacchetto>'."
+[ "$1" = "--version" ] && exit 0
+exit 1

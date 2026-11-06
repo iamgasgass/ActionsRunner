@@ -435,7 +435,7 @@ enum GitEmulation {
         guard let sub = a.first else { io.stdout.write("usage: git <command>\n"); return 1 }
         switch sub {
         case "--version", "version":
-            io.stdout.write("git version 2.51.0 (emulato da ActionsRunner iOS)\n"); return 0
+            io.stdout.write("git version 2.51.0 (emulazione dell'interprete integrato)\n"); return 0
         case "rev-parse":
             if a.contains("--abbrev-ref") { io.stdout.write(branch + "\n"); return 0 }
             if a.contains("--show-toplevel") { io.stdout.write((sh.state.vars["GITHUB_WORKSPACE"] ?? sh.state.cwd) + "\n"); return 0 }
@@ -472,7 +472,7 @@ enum GitEmulation {
         case "describe":
             io.stderr.write("fatal: No names found, cannot describe anything.\n"); return 128
         default:
-            io.stderr.write("git \(sub): non disponibile nel runner iOS (solo emulazione di rev-parse/log/branch/status). Usa \"Esegui su GitHub\".\n")
+            io.stderr.write("git \(sub): l'interprete integrato emula solo rev-parse/log/branch/status. Per git completo esegui lo step nella VM Linux.\n")
             return 1
         }
     }

@@ -286,7 +286,7 @@ final class ShellTests: XCTestCase {
         XCTAssertTrue(r2.1.hasSuffix("ok\n"))
         let r3 = await sh("xcodebuild -version")
         XCTAssertEqual(r3.0, 127)
-        XCTAssertTrue(r3.1.contains("Esegui su GitHub"))
+        XCTAssertTrue(r3.1.contains("solo su macOS"))
     }
 }
 
