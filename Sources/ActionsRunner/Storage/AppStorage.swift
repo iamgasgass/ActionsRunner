@@ -13,6 +13,7 @@ enum AppPaths {
     static var localRuns: URL { ensure(caches.appendingPathComponent("Runs", isDirectory: true)) }
     static var actionsCache: URL { ensure(caches.appendingPathComponent("Actions", isDirectory: true)) }
     static var cacheStore: URL { ensure(caches.appendingPathComponent("ActionsCache", isDirectory: true)) }
+    static var cloudArtifacts: URL { ensure(caches.appendingPathComponent("GitHubArtifacts", isDirectory: true)) }
     static var exports: URL { ensure(documents.appendingPathComponent("Export", isDirectory: true)) }
     static var temp: URL { ensure(fm.temporaryDirectory.appendingPathComponent("ActionsRunner", isDirectory: true)) }
 
@@ -118,6 +119,9 @@ struct Project: Codable, Identifiable, Hashable {
     var fileCount: Int
     var sizeBytes: Int64
     var localRunCounter: Int = 0
+    /// Repository GitHub collegato (owner/nome) e branch usati per "Esegui su GitHub".
+    var githubRepo: String?
+    var githubBranch: String?
 
     var folder: URL { AppPaths.projects.appendingPathComponent(id.uuidString, isDirectory: true) }
     var repoURL: URL { folder.appendingPathComponent("repo", isDirectory: true) }
@@ -228,5 +232,25 @@ final class ProjectStore {
         let dest = AppPaths.exports.appendingPathComponent("\(Project.sanitizedRepoName(p.name)).zip")
         try ZipUtil.zipDirectory(p.repoURL, to: dest)
         return dest
+    }
+}
+
+extension Project {
+    enum CodingKeys: String, CodingKey {
+        case id, name, importedAt, sourceFileName, fileCount, sizeBytes, localRunCounter, githubRepo, githubBranch
+    }
+
+    /// Decodifica tollerante: i campi aggiunti nelle versioni successive sono facoltativi.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        importedAt = try c.decode(Date.self, forKey: .importedAt)
+        sourceFileName = try c.decodeIfPresent(String.self, forKey: .sourceFileName) ?? ""
+        fileCount = try c.decodeIfPresent(Int.self, forKey: .fileCount) ?? 0
+        sizeBytes = try c.decodeIfPresent(Int64.self, forKey: .sizeBytes) ?? 0
+        localRunCounter = try c.decodeIfPresent(Int.self, forKey: .localRunCounter) ?? 0
+        githubRepo = try c.decodeIfPresent(String.self, forKey: .githubRepo)
+        githubBranch = try c.decodeIfPresent(String.self, forKey: .githubBranch)
     }
 }

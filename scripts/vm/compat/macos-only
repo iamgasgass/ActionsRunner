@@ -1,0 +1,7 @@
+#!/bin/sh
+# Strumenti di Apple (Xcode, firma, notarizzazione) che esistono solo su macOS.
+# Nella VM Linux dell'app non possono esistere: Apple non li distribuisce per Linux né per iOS.
+# Al posto di "command not found" si spiega il motivo, con lo stesso exit code (127).
+name=$(basename "$0")
+echo "::error title=$name non disponibile::$name fa parte di Xcode/macOS e può essere eseguito solo su un Mac. Questa app esegue i job in una VM Linux su iPhone, dove gli strumenti Apple (xcodebuild, xcrun, SDK iOS, firma del codice) non esistono e non possono essere installati. Per questi job usa \"Esegui su GitHub\" nella schermata del workflow: l'app carica il progetto, lo esegue sui Mac di GitHub e ti mostra log e artifact (es. l'IPA)." >&2
+exit 127

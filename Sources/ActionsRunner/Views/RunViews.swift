@@ -198,11 +198,29 @@ struct RunsView: View {
 
     var body: some View {
         List {
-            if runs.localRuns.isEmpty {
+            if runs.localRuns.isEmpty && runs.cloudRuns.isEmpty {
                 ContentUnavailableView("Nessuna esecuzione", systemImage: "play.slash", description: Text("Avvia un workflow da un progetto."))
             }
+            if !runs.cloudRuns.isEmpty {
+                Section("Su GitHub") {
+                    ForEach(runs.cloudRuns) { m in
+                        NavigationLink { CloudRunView(model: m) } label: {
+                            HStack {
+                                StatusIcon(status: m.status, conclusion: m.conclusion)
+                                VStack(alignment: .leading) {
+                                    Text(m.run?.displayTitle ?? m.title)
+                                    Text([m.repo, m.run.map { "#\($0.runNumber)" }, Format.relative.localizedString(for: m.createdAt, relativeTo: Date())]
+                                        .compactMap { $0 }.joined(separator: " · "))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .swipeActions { Button("Elimina", role: .destructive) { runs.removeCloud(m) } }
+                    }
+                }
+            }
             if !runs.localRuns.isEmpty {
-                Section {
+                Section("Sul dispositivo") {
                     ForEach(runs.localRuns) { m in
                         NavigationLink { LocalRunView(model: m) } label: {
                             HStack {

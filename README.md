@@ -1,8 +1,12 @@
 # Actions Runner per iOS
 
 App iOS (SwiftUI, iOS 17+) che importa un **file .zip contenente una repository**, legge i workflow in
-`.github/workflows/*.yml` e **li esegue interamente sul dispositivo**, come farebbe GitHub Actions:
-nessun account, nessun token, nessun server, nessuna libreria di terze parti.
+`.github/workflows/*.yml` e li esegue in due modi, senza librerie di terze parti:
+
+- **Sul dispositivo**: motore Actions + VM Linux integrata, nessun account né server;
+- **Su GitHub** (facoltativo, con un token): l'app carica il progetto su un branch, avvia il workflow
+  sui **runner reali di GitHub** (Ubuntu, Windows, **macOS con Xcode**) e mostra in tempo reale job,
+  step, log, annotazioni e artifact, che si scaricano nell'app (es. l'IPA).
 
 ## Architettura
 
@@ -43,13 +47,43 @@ nessun account, nessun token, nessun server, nessuna libreria di terze parti.
 Unico accesso di rete facoltativo: il download (anonimo) delle azioni `uses: owner/repo@ref` non
 ancora in cache, come fa il runner di GitHub. Dopo il primo download funzionano anche offline.
 
+## Esegui su GitHub
+
+Per i workflow che richiedono macOS/Xcode (o qualunque cosa debba girare esattamente sui runner di GitHub).
+
+1. **Impostazioni → Account GitHub**: incolla un token (classic con scope `repo` e `workflow`, oppure
+   fine-grained con Contents, Actions, Workflows, Secrets, Variables in lettura/scrittura). Resta nel
+   portachiavi del dispositivo e viene inviato solo a `api.github.com`.
+2. Nel workflow: **Esegui su GitHub** → scegli o crea un repository (privato consigliato) e il branch.
+3. L'app:
+   - calcola in locale gli SHA-1 git dei file e carica **solo quelli che GitHub non ha** (Git Data API,
+     4 upload in parallelo, cache dei blob già inviati);
+   - crea un commit con l'albero **identico al progetto** (permessi eseguibili e symlink inclusi);
+   - avvia il workflow con **workflow_dispatch** (con gli input) se il workflow lo dichiara, altrimenti
+     con il **push** del commit, come farebbe `git push`; l'ID della run arriva dalla risposta di
+     GitHub (`return_run_details`) o viene cercato per commit;
+   - facoltativamente copia nel repository i **secrets** (cifrati sul dispositivo con la sealed box di
+     libsodium, reimplementata e verificata contro libsodium) e le **variabili** configurate nell'app;
+   - segue la run con richieste condizionali (ETag: le risposte 304 non consumano il limite di
+     GitHub), intervallo adattivo (3 s in esecuzione, 5 s in coda, rallenta se il limite si avvicina);
+   - scarica i log di ogni job (anche parziali durante l'esecuzione) e li divide per step usando gli
+     orari, con gruppi, errori e avvisi come su github.com; legge le annotazioni;
+   - elenca e scarica gli **artifact**, ne mostra il contenuto e condivide i singoli file (es. `.ipa`);
+   - permette di **annullare** (anche forzato) e **rieseguire** (tutti i job, solo i falliti, con debug);
+   - salva le run: dopo il riavvio dell'app riprende il monitoraggio; notifica la fine se l'app è in
+     background.
+
+Sono le stesse API che usa github.com: il comportamento è quello di GitHub, perché è GitHub a eseguire.
+
 ## Limiti onesti
 
 - **Prestazioni**: la VM è un emulatore interpretato (iOS non permette JIT alle app normali).
   L'avvio richiede da decine di secondi ad alcuni minuti e i comandi pesanti (es. `npm install`,
   compilazioni C) sono molto più lenti che su un PC.
-- **Niente Xcode/macOS**: un job `runs-on: macos-*` gira comunque nella VM Linux, quindi `xcodebuild`,
-  `swift`, `codesign` non esistono (non esistono per Linux/iOS). I container Docker non sono eseguibili.
+- **Niente Xcode/macOS sul dispositivo**: un job `runs-on: macos-*` eseguito sul dispositivo gira nella
+  VM Linux, dove `xcodebuild`, `swift`, `codesign` non esistono (Apple non li distribuisce per Linux/iOS
+  e la licenza ne consente l'uso solo su Mac): per questi job usa **Esegui su GitHub**.
+  I container Docker non sono eseguibili sul dispositivo.
 - La VM ha la memoria limitata dalle regole di iOS (impostabile, predefinita 512 MB).
 - Kernel della VM: Linux 4.15 riscv64 dell'immagine ufficiale di TinyEMU; alcuni programmi molto recenti
   potrebbero richiedere un kernel più nuovo.
@@ -120,6 +154,7 @@ Sources/ActionsRunner/
   Engine/      runner, matrix, comandi di workflow, azioni
   Shell/       interprete bash integrato
   VM/          bridge C verso TinyEMU e gestione della VM
+  GitHub/      API REST, caricamento (Git Data API), avvio e monitoraggio delle run, sealed box
   Storage/     progetti, impostazioni, ZIP
   Views/       interfaccia (progetti, esecuzioni, terminale Linux, impostazioni)
 Tests/ActionsRunnerTests/       test (Xcode) di YAML, ZIP, espressioni, matrix, shell, integrazione

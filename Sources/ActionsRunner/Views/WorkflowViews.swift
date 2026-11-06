@@ -8,6 +8,14 @@ struct WorkflowDetailView: View {
     @Environment(ProjectStore.self) private var store
     @State private var showLocal = false
     @State private var startedLocal: LocalRunModel?
+    @State private var showCloud = false
+    @State private var startedCloud: CloudRunModel?
+
+    private var hasMacJobs: Bool {
+        workflow.jobs.contains { j in
+            (j.runsOn?.scalarString ?? j.runsOn?.toJSON(pretty: false) ?? "").lowercased().contains("macos")
+        }
+    }
 
     var body: some View {
         List {
@@ -22,6 +30,17 @@ struct WorkflowDetailView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     } icon: { Image(systemName: "iphone") }
+                }
+                Button { showCloud = true } label: {
+                    Label {
+                        VStack(alignment: .leading) {
+                            Text("Esegui su GitHub").font(.headline)
+                            Text(hasMacJobs
+                                 ? "Necessario per questo workflow: i job macOS (Xcode, SDK iOS, firma) girano sui Mac di GitHub. Log, annotazioni e artifact (es. IPA) arrivano nell'app."
+                                 : "Sui runner reali di GitHub (Ubuntu, Windows, macOS con Xcode): log, annotazioni e artifact nell'app.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    } icon: { Image(systemName: "cloud") }
                 }
             }
 
@@ -88,7 +107,16 @@ struct WorkflowDetailView: View {
                 }
             }
         }
+        .sheet(isPresented: $showCloud) {
+            NavigationStack {
+                CloudRunConfigView(project: store.project(project.id) ?? project, workflow: workflow) { model in
+                    showCloud = false
+                    startedCloud = model
+                }
+            }
+        }
         .navigationDestination(item: $startedLocal) { m in LocalRunView(model: m) }
+        .navigationDestination(item: $startedCloud) { m in CloudRunView(model: m) }
     }
 }
 

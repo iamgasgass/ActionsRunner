@@ -21,6 +21,14 @@ struct SettingsView: View {
                 Text("La VM Linux (RISC-V 64, Alpine) gira interamente nell'app: bash, git, python, node e gli altri pacchetti inclusi sono programmi Linux veri. La memoria si applica al successivo avvio della VM.")
             }
 
+            Section {
+                NavigationLink { GitHubAccountView() } label: {
+                    LabeledContent("Account GitHub", value: GitHubAPI.stored == nil ? "non collegato" : "collegato")
+                }
+            } header: { Text("GitHub") } footer: {
+                Text("Serve solo per \"Esegui su GitHub\": il workflow gira sui runner di GitHub (anche macOS con Xcode) e log e artifact arrivano nell'app.")
+            }
+
             Section("Contesto simulato") {
                 TextField("Owner del repository (github.repository_owner)", text: $s.repositoryOwner)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -43,7 +51,7 @@ struct SettingsView: View {
             Section("Info") {
                 LabeledContent("Versione", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.0")
                 LabeledContent("Dipendenze esterne", value: "nessuna")
-                LabeledContent("Account / token", value: "non richiesti")
+                LabeledContent("Token GitHub", value: "solo per Esegui su GitHub")
             }
         }
         .navigationTitle("Impostazioni")

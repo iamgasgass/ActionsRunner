@@ -19,6 +19,12 @@ cp $W/scripts/vm/cmdline.txt "$W/out/vm-cmdline.txt"
 mkdir -p "$R/usr/local/bin"
 for c in sudo apt-get brew; do install -m 755 "$W/scripts/vm/compat/$c" "$R/usr/local/bin/$c"; done
 ln -sf apt-get "$R/usr/local/bin/apt"
+# strumenti solo-macOS: messaggio esplicito invece di "command not found"
+install -m 755 "$W/scripts/vm/compat/macos-only" "$R/usr/local/bin/macos-only"
+for t in xcodebuild xcrun xcode-select xcodegen xcpretty xcbeautify swift swiftc codesign security \
+         agvtool simctl lipo ditto hdiutil pkgbuild productbuild notarytool altool sw_vers pod carthage fastlane; do
+  [ -e "$R/usr/bin/$t" ] || ln -sf macos-only "$R/usr/local/bin/$t"
+done
 printf '%s/main\n%s/community\n' "$REPO" "$REPO" > "$R/etc/apk/repositories"
 echo actionsrunner > "$R/etc/hostname"
 mkdir -p "$R/home/runner" "$R/mnt/host" "$R/root" "$R/dev" "$R/proc" "$R/sys" "$R/tmp" "$R/run"

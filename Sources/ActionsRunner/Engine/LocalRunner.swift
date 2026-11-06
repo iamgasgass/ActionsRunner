@@ -524,7 +524,7 @@ final class LocalWorkflowRunner {
         if options.shellEngine != .builtin && LinuxVM.shared.isSupported {
             slog("Image: VM Linux integrata (TinyEMU RISC-V 64 + Alpine Linux) — runner.os: \(exec.runnerOS)")
             if exec.runnerOS != "Linux" {
-                slog("runs-on '\(label)' richiede \(exec.runnerOS): gli step verranno eseguiti nella VM Linux; gli strumenti specifici di \(exec.runnerOS) (es. xcodebuild) non esistono.", .warning)
+                slog("runs-on '\(label)' richiede \(exec.runnerOS): gli step verranno eseguiti nella VM Linux; gli strumenti specifici di \(exec.runnerOS) (es. xcodebuild) non esistono. Per eseguirlo su un vero runner \(exec.runnerOS) usa \"Esegui su GitHub\".", .warning)
             }
         } else {
             slog("Image: interprete bash integrato (Swift) — runner.os: \(exec.runnerOS)")

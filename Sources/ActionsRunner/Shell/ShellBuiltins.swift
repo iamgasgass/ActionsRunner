@@ -35,7 +35,7 @@ enum ShellBuiltins {
 
     static func notFoundMessage(_ name: String) -> String {
         if macOnlyTools.contains(name) {
-            return "\(name): strumento disponibile solo su macOS con Xcode: non esiste né per iOS né per Linux, quindi non può essere eseguito in questa app.\n"
+            return "\(name): strumento disponibile solo su macOS con Xcode: non esiste né per iOS né per Linux. Usa \"Esegui su GitHub\" per eseguire questo job sui Mac di GitHub.\n"
         }
         if realRunnerTools.contains(name) {
             if LinuxVM.shared.isSupported {
