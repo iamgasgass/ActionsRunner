@@ -17,6 +17,12 @@ struct ActionsRunnerApp: App {
                     guard url.isFileURL else { return }
                     Task { _ = await store.importItem(at: url) }
                 }
+                .task {
+                    if settings.bootVMOnLaunch && LinuxVM.shared.isSupported {
+                        let mem = settings.vmMemoryMB
+                        Task.detached { try? await LinuxVM.shared.boot(memoryMB: mem) }
+                    }
+                }
         }
     }
 }
@@ -28,6 +34,8 @@ struct RootView: View {
                 .tabItem { Label("Progetti", systemImage: "shippingbox") }
             NavigationStack { RunsView() }
                 .tabItem { Label("Esecuzioni", systemImage: "play.circle") }
+            NavigationStack { TerminalView() }
+                .tabItem { Label("Linux", systemImage: "terminal") }
             NavigationStack { SettingsView() }
                 .tabItem { Label("Impostazioni", systemImage: "gearshape") }
         }
@@ -39,7 +47,6 @@ struct RootView: View {
 @Observable
 final class RunCenter {
     var localRuns: [LocalRunModel] = []
-    var cloudSessions: [CloudRunSession] = []
     @ObservationIgnored private var runners: [UUID: LocalWorkflowRunner] = [:]
     @ObservationIgnored private var backgroundTasks: [UUID: UIBackgroundTaskIdentifier] = [:]
 
@@ -70,12 +77,6 @@ final class RunCenter {
     }
 
     func cancel(_ model: LocalRunModel) { runners[model.id]?.cancel() }
-
-    func newCloudSession() -> CloudRunSession {
-        let s = CloudRunSession()
-        cloudSessions.insert(s, at: 0)
-        return s
-    }
 
     func removeLocal(_ model: LocalRunModel) {
         runners[model.id]?.cancel()

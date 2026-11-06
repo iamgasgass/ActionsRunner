@@ -27,14 +27,6 @@ settings:
       SWIFT_OPTIMIZATION_LEVEL: "-O"
       SWIFT_COMPILATION_MODE: wholemodule
 
-packages:
-  Yams:
-    url: https://github.com/jpsim/Yams.git
-    from: "6.0.0"
-  ZIPFoundation:
-    url: https://github.com/weichsel/ZIPFoundation.git
-    from: "0.9.19"
-
 targets:
   ActionsRunner:
     type: application
@@ -43,6 +35,7 @@ targets:
       - path: Sources/ActionsRunner
         excludes:
           - "**/*.md"
+          - "**/.gitkeep"
     info:
       path: Sources/ActionsRunner/Resources/Info.plist
       properties:
@@ -83,9 +76,11 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_STYLE: Automatic
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
-    dependencies:
-      - package: Yams
-      - package: ZIPFoundation
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/ActionsRunner/VM/ActionsRunner-Bridging-Header.h
+        # temu_main è fornito da Vendor/LinuxVM/libtemu.a (collegato dalla CI con -force_load);
+        # se la libreria manca il simbolo resta debole e la VM risulta non disponibile.
+        OTHER_LDFLAGS: "$(inherited) -Wl,-U,_temu_main"
+        GCC_C_LANGUAGE_STANDARD: gnu11
 
   ActionsRunnerTests:
     type: bundle.unit-test

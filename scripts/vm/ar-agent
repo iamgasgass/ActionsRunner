@@ -1,0 +1,23 @@
+#!/bin/busybox sh
+# Agente di ActionsRunner: riceve comandi dall'app sulla console ed esegue gli script condivisi.
+# Protocollo: host -> "__AR_RUN__ <id> <percorso-script>"; VM -> output ... "__AR_DONE__ <id> <exit-code>"
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+stty -echo -onlcr 2>/dev/null
+trap ':' INT
+echo "__AR_READY__"
+while IFS= read -r line; do
+  case "$line" in
+    __AR_RUN__\ *)
+      set -- $line
+      id="$2"
+      script="$3"
+      /bin/sh "$script" </dev/null
+      rc=$?
+      printf '\n__AR_DONE__ %s %s\n' "$id" "$rc"
+      ;;
+    __AR_PING__*)
+      echo "__AR_PONG__"
+      ;;
+  esac
+done
+echo "__AR_VM_EXIT__ agent"

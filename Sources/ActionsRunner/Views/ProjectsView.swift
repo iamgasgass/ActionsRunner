@@ -58,7 +58,6 @@ struct ProjectRow: View {
                 Label("\(workflows.count)", systemImage: "gearshape.2")
                 Label("\(project.fileCount)", systemImage: "doc")
                 Text(Format.bytes(project.sizeBytes))
-                if let r = project.githubRepo { Label(r, systemImage: "cloud") }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -70,8 +69,6 @@ struct ProjectRow: View {
 struct ProjectDetailView: View {
     let projectId: UUID
     @Environment(ProjectStore.self) private var store
-    @Environment(AppSettings.self) private var settings
-    @Environment(RunCenter.self) private var runs
     @State private var workflows: [Workflow] = []
     @State private var loadErrors: [Diagnostic] = []
     @State private var exportURL: URL?
@@ -87,11 +84,6 @@ struct ProjectDetailView: View {
                     LabeledContent("Dimensione", value: Format.bytes(project.sizeBytes))
                     LabeledContent("Importato", value: project.importedAt.formatted(date: .abbreviated, time: .shortened))
                     LabeledContent("Sorgente", value: project.sourceFileName)
-                    if let o = project.githubOwner, let r = project.githubRepo {
-                        Link(destination: URL(string: "https://github.com/\(o)/\(r)")!) {
-                            Label("\(o)/\(r)", systemImage: "arrow.up.right.square")
-                        }
-                    }
                 }
 
                 Section("Workflow (.github/workflows)") {
@@ -125,27 +117,6 @@ struct ProjectDetailView: View {
                     if let e = exportError { Text(e).foregroundStyle(.red).font(.footnote) }
                 }
 
-                if !project.cloudRuns.isEmpty {
-                    Section("Esecuzioni su GitHub") {
-                        ForEach(project.cloudRuns.prefix(20)) { r in
-                            NavigationLink {
-                                CloudRunAttachView(record: r)
-                            } label: {
-                                HStack {
-                                    StatusIcon(api: r.conclusion == nil ? "in_progress" : "completed", conclusion: r.conclusion)
-                                    VStack(alignment: .leading) {
-                                        Text("#\(r.runId) · \((r.workflow as NSString).lastPathComponent)").font(.subheadline)
-                                        Text(Format.relative.localizedString(for: r.date, relativeTo: Date())).font(.caption).foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Section("Impostazioni GitHub del progetto") {
-                    ProjectGitHubFields(project: project)
-                }
             }
             .navigationTitle(project.name)
             .toolbar {
@@ -169,38 +140,6 @@ struct ProjectDetailView: View {
         let r = WorkflowParser.loadWorkflows(in: p.repoURL)
         workflows = r.workflows
         loadErrors = r.errors
-    }
-}
-
-struct ProjectGitHubFields: View {
-    let project: Project
-    @Environment(ProjectStore.self) private var store
-    @Environment(AppSettings.self) private var settings
-    @State private var owner = ""
-    @State private var repo = ""
-    @State private var branch = ""
-
-    var body: some View {
-        Group {
-            TextField("Owner (vuoto = \(settings.effectiveOwner.isEmpty ? "il tuo account" : settings.effectiveOwner))", text: $owner)
-                .textInputAutocapitalization(.never).autocorrectionDisabled()
-            TextField("Repository (vuoto = \(Project.sanitizedRepoName(settings.repoPrefix + project.name)))", text: $repo)
-                .textInputAutocapitalization(.never).autocorrectionDisabled()
-            TextField("Branch (vuoto = default)", text: $branch)
-                .textInputAutocapitalization(.never).autocorrectionDisabled()
-            Button("Salva") {
-                var p = project
-                p.githubOwner = owner.isEmpty ? nil : owner
-                p.githubRepo = repo.isEmpty ? nil : repo
-                p.githubBranch = branch.isEmpty ? nil : branch
-                store.update(p)
-            }
-        }
-        .onAppear {
-            owner = project.githubOwner ?? ""
-            repo = project.githubRepo ?? ""
-            branch = project.githubBranch ?? ""
-        }
     }
 }
 

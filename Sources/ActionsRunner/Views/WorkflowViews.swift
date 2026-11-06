@@ -7,9 +7,7 @@ struct WorkflowDetailView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(ProjectStore.self) private var store
     @State private var showLocal = false
-    @State private var showCloud = false
     @State private var startedLocal: LocalRunModel?
-    @State private var startedCloud: CloudRunSession?
 
     var body: some View {
         List {
@@ -17,20 +15,13 @@ struct WorkflowDetailView: View {
                 Button { showLocal = true } label: {
                     Label {
                         VStack(alignment: .leading) {
-                            Text("Esegui sul dispositivo").font(.headline)
-                            Text("Interprete integrato: espressioni, matrix, needs, bash, artifact, cache. Niente toolchain esterne.")
+                            Text("Esegui il workflow").font(.headline)
+                            Text(LinuxVM.shared.isSupported
+                                 ? "Tutto sul dispositivo: motore Actions + VM Linux (Alpine) per gli step run: e le azioni JavaScript."
+                                 : "Tutto sul dispositivo con l'interprete integrato (VM Linux non inclusa in questa build).")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     } icon: { Image(systemName: "iphone") }
-                }
-                Button { showCloud = true } label: {
-                    Label {
-                        VStack(alignment: .leading) {
-                            Text("Esegui su GitHub (fedele)").font(.headline)
-                            Text("Carica la repo e avvia il workflow sui runner reali (macOS/Linux/Windows), con log e artifact.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    } icon: { Image(systemName: "cloud.fill") }
                 }
             }
 
@@ -97,26 +88,12 @@ struct WorkflowDetailView: View {
                 }
             }
         }
-        .sheet(isPresented: $showCloud) {
-            NavigationStack {
-                CloudRunConfigView(project: project, workflow: workflow) { session in
-                    showCloud = false
-                    startedCloud = session
-                }
-            }
-        }
         .navigationDestination(item: $startedLocal) { m in LocalRunView(model: m) }
-        .navigationDestination(item: $startedCloud) { s in CloudRunView(session: s) }
     }
 }
 
 extension LocalRunModel: Hashable {
     static func == (a: LocalRunModel, b: LocalRunModel) -> Bool { a.id == b.id }
-    func hash(into h: inout Hasher) { h.combine(id) }
-}
-
-extension CloudRunSession: Hashable {
-    static func == (a: CloudRunSession, b: CloudRunSession) -> Bool { a.id == b.id }
     func hash(into h: inout Hasher) { h.combine(id) }
 }
 
@@ -180,6 +157,7 @@ struct LocalRunConfigView: View {
     @State private var onlyJob = ""
     @State private var debug = false
     @State private var policy: LocalRunOptions.UnsupportedPolicy = .fail
+    @State private var engine: ShellEngine = .auto
 
     var body: some View {
         Form {
@@ -207,13 +185,16 @@ struct LocalRunConfigView: View {
                     Text("Tutti").tag("")
                     ForEach(workflow.jobs, id: \.id) { Text($0.displayName).tag($0.id) }
                 }
+                Picker("Esecuzione degli step", selection: $engine) {
+                    ForEach(ShellEngine.allCases) { Text($0.label).tag($0) }
+                }
                 Picker("Azioni non supportate", selection: $policy) {
                     ForEach(LocalRunOptions.UnsupportedPolicy.allCases) { Text($0.label).tag($0) }
                 }
                 Toggle("Debug (ACTIONS_STEP_DEBUG)", isOn: $debug)
             }
             Section {
-                Text("I secrets e le variabili locali si configurano in Impostazioni. Il token GitHub (se presente) è esposto come secrets.GITHUB_TOKEN e usato per scaricare le azioni composite.")
+                Text("I secrets e le variabili si configurano in Impostazioni. Le azioni remote (uses: owner/repo@ref) vengono scaricate una volta e poi restano in cache: le esecuzioni successive funzionano anche offline.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -229,10 +210,11 @@ struct LocalRunConfigView: View {
                     o.inputs = inputs
                     o.secrets = settings.localSecrets
                     o.variables = settings.localVariables
-                    o.githubToken = settings.hasToken ? settings.token : nil
-                    o.repositoryOwner = project.githubOwner ?? (settings.effectiveOwner.isEmpty ? "local" : settings.effectiveOwner)
-                    o.repositoryName = project.githubRepo ?? Project.sanitizedRepoName(project.name)
-                    o.actor = settings.login.isEmpty ? "ios-user" : settings.login
+                    o.repositoryOwner = settings.repositoryOwner.isEmpty ? "local" : settings.repositoryOwner
+                    o.repositoryName = Project.sanitizedRepoName(project.name)
+                    o.actor = settings.actor.isEmpty ? "ios-user" : settings.actor
+                    o.shellEngine = engine
+                    o.vmMemoryMB = settings.vmMemoryMB
                     o.debug = debug || settings.debugLogs
                     o.onlyJob = onlyJob.isEmpty ? nil : onlyJob
                     o.unsupportedActions = policy
@@ -243,79 +225,10 @@ struct LocalRunConfigView: View {
         }
         .onAppear {
             event = workflow.eventNames.first { ["push", "workflow_dispatch", "pull_request"].contains($0) } ?? workflow.eventNames.first ?? "push"
-            if let b = project.githubBranch { ref = "refs/heads/\(b)" }
             inputs = DispatchInputsForm.defaults(workflow.dispatchInputs)
             policy = settings.unsupportedPolicy
+            engine = settings.shellEngine
             debug = settings.debugLogs
         }
-    }
-}
-
-struct CloudRunConfigView: View {
-    let project: Project
-    let workflow: Workflow
-    let onStart: (CloudRunSession) -> Void
-    @Environment(RunCenter.self) private var runs
-    @Environment(AppSettings.self) private var settings
-    @Environment(ProjectStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
-    @State private var trigger: CloudRunSession.TriggerMode = .automatic
-    @State private var inputs: [String: String] = [:]
-    @State private var branch = ""
-
-    var body: some View {
-        Form {
-            if !settings.hasToken {
-                Section {
-                    Label("Configura un token GitHub in Impostazioni (scope: repo + workflow, oppure fine-grained con Contents, Actions, Workflows, Administration in scrittura).", systemImage: "key.fill")
-                        .foregroundStyle(.orange)
-                }
-            }
-            Section("Destinazione") {
-                LabeledContent("Repository", value: "\(project.githubOwner ?? (settings.effectiveOwner.isEmpty ? "<tuo account>" : settings.effectiveOwner))/\(project.githubRepo ?? Project.sanitizedRepoName(settings.repoPrefix + project.name))")
-                TextField("Branch (vuoto = \(project.githubBranch ?? "default"))", text: $branch)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                Text("Il contenuto dello ZIP verrà caricato esattamente com'è (commit unico). Il repository viene creato se non esiste\(settings.privateRepos ? " (privato)" : "").")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Avvio") {
-                Picker("Modalità", selection: $trigger) {
-                    ForEach(CloudRunSession.TriggerMode.allCases) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                switch trigger {
-                case .automatic: Text("Usa il push se il workflow ha 'on: push' compatibile col branch, altrimenti workflow_dispatch.").font(.caption)
-                case .push: Text("Il workflow parte solo se 'on: push' corrisponde al branch.").font(.caption)
-                case .dispatch: Text("Richiede 'on: workflow_dispatch' nel file.").font(.caption)
-                }
-                if !workflow.supportsDispatch && trigger == .dispatch {
-                    Label("Questo workflow non dichiara workflow_dispatch", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
-                }
-            }
-            if workflow.supportsDispatch && !workflow.dispatchInputs.isEmpty && trigger != .push {
-                Section("Input workflow_dispatch") { DispatchInputsForm(inputs: workflow.dispatchInputs, values: $inputs) }
-            }
-            if settings.syncSecrets {
-                Section {
-                    Text("Verranno sincronizzati \(settings.localSecrets.count) secrets (cifrati con sealed box) e \(settings.localVariables.count) variabili.")
-                        .font(.caption)
-                }
-            }
-        }
-        .navigationTitle("Esegui su GitHub")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("Annulla") { dismiss() } }
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Avvia") {
-                    let s = runs.newCloudSession()
-                    s.start(project: project, workflow: workflow, settings: settings, store: store,
-                            trigger: trigger, inputs: inputs, branchOverride: branch.isEmpty ? nil : branch)
-                    onStart(s)
-                }
-                .disabled(!settings.hasToken)
-            }
-        }
-        .onAppear { inputs = DispatchInputsForm.defaults(workflow.dispatchInputs) }
     }
 }

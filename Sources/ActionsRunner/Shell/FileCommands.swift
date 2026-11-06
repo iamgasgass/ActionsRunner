@@ -407,7 +407,7 @@ enum FileCommands {
         let dest = sh.resolve(values["d"] ?? ".")
         do {
             do {
-                // ZIPFoundation non sovrascrive: estraiamo in una cartella temporanea e uniamo
+                // estraiamo in una cartella temporanea e uniamo (sovrascrittura controllata)
                 let tmp = URL(fileURLWithPath: sh.host.tempDir).appendingPathComponent("unzip-\(UUID().uuidString)")
                 try ZipUtil.unzip(sh.resolve(file), to: tmp)
                 for n in try fm.contentsOfDirectory(atPath: tmp.path) {

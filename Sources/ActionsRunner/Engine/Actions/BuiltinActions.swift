@@ -122,8 +122,7 @@ enum BuiltinActions {
                 let comps = repository.split(separator: "/").map(String.init)
                 guard comps.count == 2 else { c.error("Valore 'repository' non valido: \(repository)"); return BuiltinResult(success: false) }
                 c.log("Download del repository \(repository)@\(refInput.isEmpty ? "HEAD" : refInput) tramite GitHub API (zipball)")
-                let token = c.input("token").isEmpty ? c.exec.github["token"]?.stringValue : c.input("token")
-                let fetcher = ActionFetcher(token: token?.isEmpty == false ? token : nil)
+                let fetcher = ActionFetcher()
                 source = try await fetcher.fetch(owner: comps[0], repo: comps[1], ref: refInput.isEmpty ? "HEAD" : refInput, log: { c.log($0) })
             }
             c.log("Fetching the repository", .groupStart)
@@ -389,7 +388,11 @@ enum BuiltinActions {
 
     static func toolchain(_ c: BuiltinActionContext, _ spec: (input: String, output: String)) -> BuiltinResult {
         let version = spec.input.isEmpty ? "" : c.input(spec.input)
-        c.warning("'\(c.ref.raw)' emulato: su iOS non è possibile installare toolchain (\(version.isEmpty ? "versione predefinita" : version)). I comandi della toolchain non saranno disponibili negli step successivi.")
+        if LinuxVM.shared.isSupported {
+            c.log("'\(c.ref.raw)': uso la toolchain preinstallata nella VM Linux (Alpine riscv64) al posto del download (\(version.isEmpty ? "versione predefinita" : "richiesta: " + version)).", .notice)
+        } else {
+            c.warning("'\(c.ref.raw)' emulato: nessuna toolchain installabile (\(version.isEmpty ? "versione predefinita" : version)).")
+        }
         onMain { c.model.note = "Emulato" }
         var out = OrderedObject()
         out[spec.output] = .string(version.isEmpty ? "emulated" : version)

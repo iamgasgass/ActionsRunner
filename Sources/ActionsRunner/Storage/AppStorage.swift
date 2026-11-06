@@ -63,33 +63,28 @@ enum Keychain {
 
 @Observable
 final class AppSettings {
-    var token: String { didSet { Keychain.set(token, for: "github-token") } }
-    var defaultOwner: String { didSet { save() } }
-    var repoPrefix: String { didSet { save() } }
-    var privateRepos: Bool { didSet { save() } }
-    var autoCreateRepo: Bool { didSet { save() } }
-    var syncSecrets: Bool { didSet { save() } }
+    var shellEngine: ShellEngine { didSet { save() } }
+    var vmMemoryMB: Int { didSet { save() } }
+    var bootVMOnLaunch: Bool { didSet { save() } }
     var debugLogs: Bool { didSet { save() } }
     var unsupportedPolicy: LocalRunOptions.UnsupportedPolicy { didSet { save() } }
+    var repositoryOwner: String { didSet { save() } }
+    var actor: String { didSet { save() } }
     var localSecrets: [String: String] { didSet { saveSecrets() } }
     var localVariables: [String: String] { didSet { save() } }
-    var login: String { didSet { save() } }
-    var tokenScopes: [String] = []
 
-    private static let defaultsKey = "settings.v1"
+    private static let defaultsKey = "settings.v2"
 
     init() {
-        token = Keychain.get("github-token") ?? ""
         let d = UserDefaults.standard.dictionary(forKey: AppSettings.defaultsKey) ?? [:]
-        defaultOwner = d["defaultOwner"] as? String ?? ""
-        repoPrefix = d["repoPrefix"] as? String ?? "ar-"
-        privateRepos = d["privateRepos"] as? Bool ?? true
-        autoCreateRepo = d["autoCreateRepo"] as? Bool ?? true
-        syncSecrets = d["syncSecrets"] as? Bool ?? false
+        shellEngine = ShellEngine(rawValue: d["shellEngine"] as? String ?? "") ?? .auto
+        vmMemoryMB = d["vmMemoryMB"] as? Int ?? 512
+        bootVMOnLaunch = d["bootVMOnLaunch"] as? Bool ?? false
         debugLogs = d["debugLogs"] as? Bool ?? false
         unsupportedPolicy = LocalRunOptions.UnsupportedPolicy(rawValue: d["unsupportedPolicy"] as? String ?? "") ?? .fail
+        repositoryOwner = d["repositoryOwner"] as? String ?? "local"
+        actor = d["actor"] as? String ?? "ios-user"
         localVariables = d["localVariables"] as? [String: String] ?? [:]
-        login = d["login"] as? String ?? ""
         if let s = Keychain.get("local-secrets"), let data = s.data(using: .utf8),
            let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
             localSecrets = dict
@@ -100,9 +95,9 @@ final class AppSettings {
 
     private func save() {
         let d: [String: Any] = [
-            "defaultOwner": defaultOwner, "repoPrefix": repoPrefix, "privateRepos": privateRepos,
-            "autoCreateRepo": autoCreateRepo, "syncSecrets": syncSecrets, "debugLogs": debugLogs,
-            "unsupportedPolicy": unsupportedPolicy.rawValue, "localVariables": localVariables, "login": login
+            "shellEngine": shellEngine.rawValue, "vmMemoryMB": vmMemoryMB, "bootVMOnLaunch": bootVMOnLaunch,
+            "debugLogs": debugLogs, "unsupportedPolicy": unsupportedPolicy.rawValue,
+            "repositoryOwner": repositoryOwner, "actor": actor, "localVariables": localVariables
         ]
         UserDefaults.standard.set(d, forKey: AppSettings.defaultsKey)
     }
@@ -112,23 +107,9 @@ final class AppSettings {
             Keychain.set(s, for: "local-secrets")
         }
     }
-
-    var hasToken: Bool { !token.trimmingCharacters(in: .whitespaces).isEmpty }
-    var effectiveOwner: String { defaultOwner.isEmpty ? login : defaultOwner }
 }
 
 // MARK: - Progetti
-
-struct CloudRunRecord: Codable, Identifiable, Hashable {
-    var id: Int { runId }
-    let runId: Int
-    let owner: String
-    let repo: String
-    let workflow: String
-    let htmlUrl: String
-    let date: Date
-    var conclusion: String?
-}
 
 struct Project: Codable, Identifiable, Hashable {
     let id: UUID
@@ -137,12 +118,7 @@ struct Project: Codable, Identifiable, Hashable {
     var sourceFileName: String
     var fileCount: Int
     var sizeBytes: Int64
-    var githubOwner: String?
-    var githubRepo: String?
-    var githubBranch: String?
     var localRunCounter: Int = 0
-    var cloudRuns: [CloudRunRecord] = []
-    var lastPushedSHA: String?
 
     var folder: URL { AppPaths.projects.appendingPathComponent(id.uuidString, isDirectory: true) }
     var repoURL: URL { folder.appendingPathComponent("repo", isDirectory: true) }

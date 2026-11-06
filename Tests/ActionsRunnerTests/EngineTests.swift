@@ -1,5 +1,4 @@
 import XCTest
-import CryptoKit
 @testable import ActionsRunner
 
 final class ExpressionTests: XCTestCase {
@@ -291,43 +290,129 @@ final class ShellTests: XCTestCase {
     }
 }
 
-final class CryptoTests: XCTestCase {
-    private func hex(_ b: [UInt8]) -> String { b.map { String(format: "%02x", $0) }.joined() }
-    private func bytes(_ h: String) -> [UInt8] {
-        var out: [UInt8] = []
-        var i = h.startIndex
-        while i < h.endIndex { let j = h.index(i, offsetBy: 2); out.append(UInt8(h[i..<j], radix: 16)!); i = j }
-        return out
+final class YAMLParserTests: XCTestCase {
+    func testBlockAndFlowStructures() throws {
+        let y = try YAMLParser.parse("""
+        # commento
+        name: "CI: test"
+        on:
+          push:
+            branches: [ main, 'release/**' ]   # commento
+        env:
+          B: "x # non commento"
+          C: it's # commento
+          D: >-
+            piegato
+            testo
+
+            paragrafo
+          E: |
+            riga 1
+              rientrata
+          G: 3.10
+          H: on
+          URL: http://example.com:8080/x
+        defaults: &defs
+          run:
+            shell: bash
+        other:
+          <<: *defs
+          extra: yes
+        jobs:
+          build:
+            steps:
+            - uses: actions/checkout@v6
+              with:
+                fetch-depth: 0
+            - run: echo plain
+                continua
+            -
+              name: trattino vuoto
+            - { name: flow, run: 'echo 1' }
+        """)
+        XCTAssertEqual(y["name"], .string("CI: test"))
+        XCTAssertNotNil(y["on"]?["push"])
+        XCTAssertEqual(y["on"]?["push"]?["branches"], .array([.string("main"), .string("release/**")]))
+        XCTAssertEqual(y["env"]?["B"], .string("x # non commento"))
+        XCTAssertEqual(y["env"]?["C"], .string("it's"))
+        XCTAssertEqual(y["env"]?["D"], .string("piegato testo\nparagrafo"))
+        XCTAssertEqual(y["env"]?["E"], .string("riga 1\n  rientrata\n"))
+        XCTAssertEqual(y["env"]?["G"], .number(3.1))
+        XCTAssertEqual(y["env"]?["H"], .string("on"))
+        XCTAssertEqual(y["env"]?["URL"], .string("http://example.com:8080/x"))
+        XCTAssertEqual(y["other"]?["run"]?["shell"], .string("bash"))
+        XCTAssertEqual(y["other"]?["extra"], .string("yes"))
+        let steps = y["jobs"]?["build"]?["steps"]?.arrayValue ?? []
+        XCTAssertEqual(steps.count, 4)
+        XCTAssertEqual(steps[0]["with"]?["fetch-depth"], .number(0))
+        XCTAssertEqual(steps[1]["run"], .string("echo plain continua"))
+        XCTAssertEqual(steps[2]["name"], .string("trattino vuoto"))
+        XCTAssertEqual(steps[3]["run"], .string("echo 1"))
     }
 
-    func testSalsa20SpecVector() {
-        let key = Array(1...16).map { UInt8($0) } + Array(201...216).map { UInt8($0) }
-        let input = Array(101...116).map { UInt8($0) }
-        let expected: [UInt8] = [69, 37, 68, 39, 41, 15, 107, 193, 255, 139, 122, 6, 170, 233, 217, 98, 89, 144, 182, 106, 21, 51, 200, 65, 239, 49, 222, 34, 215, 114, 40, 126, 104, 197, 7, 225, 197, 153, 31, 2, 102, 78, 76, 176, 84, 245, 246, 184, 177, 160, 133, 130, 6, 72, 149, 119, 192, 195, 132, 236, 234, 103, 246, 74]
-        XCTAssertEqual(Salsa20.block(key: key, input: input), expected)
+    func testQuotedScalars() throws {
+        let y = try YAMLParser.parse("""
+        a: 'it''s'
+        b: "tab\\tquote\\" é\\u00e9"
+        c: "riga
+          continua"
+        "chiave: quotata": 1
+        """)
+        XCTAssertEqual(y["a"], .string("it's"))
+        XCTAssertEqual(y["b"], .string("tab\tquote\" éé"))
+        XCTAssertEqual(y["c"], .string("riga continua"))
+        XCTAssertEqual(y["chiave: quotata"], .number(1))
     }
 
-    func testHSalsaAndSecretBox() {
-        let key = Array(0..<32).map { UInt8($0) }
-        let nonce = Array(100..<124).map { UInt8($0) }
-        XCTAssertEqual(hex(Salsa20.hsalsa20(key: key, nonce: Array(nonce[0..<16]))), "d0e0df786a40b0aec89ca886cd211b1571660c9902c957cef234a547650a993a")
-        let boxed = SecretBox.seal(Array("hello, sealed box test vector!".utf8), nonce: nonce, key: key)
-        XCTAssertEqual(hex(boxed), "56492d38381d691821d312865510452b6adcf5a5559aee9ad59c4ff153a4c177468a4cc297d26b6dc36f36fb78aa")
-    }
+    func testChompingAndNestedSequences() throws {
+        let y = try YAMLParser.parse("""
+        keep: |+
+          a
 
-    func testPoly1305RFC8439() {
-        let key = bytes("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b")
-        XCTAssertEqual(hex(Poly1305.authenticate(message: Array("Cryptographic Forum Research Group".utf8), key: key)), "a8061dc1305136c6c22b8baf0c0127a9")
+        strip: |-
+          b
+        list:
+        - - x
+          - y
+        - z
+        """)
+        XCTAssertEqual(y["keep"], .string("a\n\n"))
+        XCTAssertEqual(y["strip"], .string("b"))
+        XCTAssertEqual(y["list"], .array([.array([.string("x"), .string("y")]), .string("z")]))
     }
+}
 
-    func testBlake2b() {
-        XCTAssertEqual(hex(Blake2b.hash(Array(0..<64).map { UInt8($0) }, outputLength: 24)), "aa054507b4916837a6d2b35b1ce7c525facdb7868ed55a8a")
+final class ZipTests: XCTestCase {
+    func testRoundTrip() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent("ziptest-\(UUID().uuidString)")
+        let src = base.appendingPathComponent("src/sub")
+        try fm.createDirectory(at: src, withIntermediateDirectories: true)
+        let big = String(repeating: "ActionsRunner ", count: 5000)
+        try big.write(to: src.appendingPathComponent("big.txt"), atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho hi\n".write(to: src.appendingPathComponent("run.sh"), atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: src.appendingPathComponent("run.sh").path)
+        let zip = base.appendingPathComponent("a.zip")
+        try ZipUtil.zipDirectory(base.appendingPathComponent("src"), to: zip)
+        let out = base.appendingPathComponent("out")
+        try ZipUtil.unzip(zip, to: out)
+        XCTAssertEqual(try String(contentsOf: out.appendingPathComponent("sub/big.txt"), encoding: .utf8), big)
+        let perms = (try fm.attributesOfItem(atPath: out.appendingPathComponent("sub/run.sh").path)[.posixPermissions] as? NSNumber)?.intValue
+        XCTAssertEqual(perms.map { $0 & 0o111 != 0 }, true)
+        XCTAssertLessThan((try fm.attributesOfItem(atPath: zip.path)[.size] as? NSNumber)?.intValue ?? .max, big.utf8.count)
+        XCTAssertEqual(ZipUtil.crc32(Data("123456789".utf8)), 0xCBF43926)
+        try? fm.removeItem(at: base)
     }
+}
 
-    func testSealedBoxLength() throws {
-        let pk = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
-        let sealed = try SealedBox.seal(Data("secret".utf8), recipientPublicKey: pk)
-        XCTAssertEqual(sealed.count, 32 + 16 + 6)
+final class VMTests: XCTestCase {
+    func testPathTranslation() {
+        let root = LinuxVM.sharedRoot.path
+        XCTAssertEqual(LinuxVM.guestPath(root + "/Runs/x/jobs/1/work", jobRoot: root + "/Runs/x/jobs/1"), "/home/runner/work")
+        XCTAssertEqual(LinuxVM.guestPath(root + "/Actions/a/b"), "/mnt/host/Actions/a/b")
+        XCTAssertEqual(LinuxVM.translate("cd \(root)/Runs/x/jobs/1/work && ls \(root)/Actions", jobRoot: root + "/Runs/x/jobs/1"),
+                       "cd /home/runner/work && ls /mnt/host/Actions")
+        XCTAssertEqual(LinuxVM.shQuote("it's"), "'it'\\''s'")
     }
 }
 
@@ -365,6 +450,7 @@ final class LocalRunnerIntegrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
         var opts = LocalRunOptions(sourceURL: src)
         opts.repositoryName = "test"
+        opts.shellEngine = .builtin
         let model = LocalRunModel(title: "CI", workflowPath: wf.path, event: "push", runNumber: 1)
         let runner = LocalWorkflowRunner(workflow: wf, options: opts, model: model)
         await runner.run()

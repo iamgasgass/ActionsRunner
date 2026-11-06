@@ -1,0 +1,35 @@
+#!/bin/busybox sh
+# PID 1 della VM Linux di ActionsRunner: prepara il sistema e avvia l'agente sulla console.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+BB=/bin/busybox
+$BB mount -t proc proc /proc
+$BB mount -t sysfs sysfs /sys
+$BB mount -t devtmpfs devtmpfs /dev 2>/dev/null || $BB mdev -s
+$BB --install -s 2>/dev/null
+$BB mkdir -p /dev/pts /dev/shm /tmp /run /mnt/host /home/runner /root
+$BB mount -t devpts devpts /dev/pts 2>/dev/null
+$BB mount -t tmpfs tmpfs /tmp
+$BB mount -t tmpfs tmpfs /run
+$BB mount -t tmpfs tmpfs /dev/shm 2>/dev/null
+$BB hostname -F /etc/hostname 2>/dev/null
+
+NINEP=0
+if $BB mount -t 9p -o trans=virtio,version=9p2000.L,msize=262144 hostfs /mnt/host 2>/dev/null \
+   || $BB mount -t 9p -o trans=virtio hostfs /mnt/host 2>/dev/null; then
+  NINEP=1
+fi
+
+$BB ip link set lo up 2>/dev/null
+NET=0
+if $BB ip link set eth0 up 2>/dev/null; then
+  $BB ip addr add 10.0.2.15/24 dev eth0 2>/dev/null
+  $BB ip route add default via 10.0.2.2 2>/dev/null
+  echo "nameserver 10.0.2.3" > /etc/resolv.conf
+  NET=1
+fi
+
+[ -e /usr/bin/python ] || { [ -e /usr/bin/python3 ] && $BB ln -s python3 /usr/bin/python; }
+
+export HOME=/root LANG=C.UTF-8 TERM=dumb
+echo "__AR_BOOT__ 9p=$NINEP net=$NET kernel=$($BB uname -r)"
+exec $BB setsid -c /sbin/ar-agent </dev/console >/dev/console 2>&1

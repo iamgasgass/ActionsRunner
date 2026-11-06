@@ -2,97 +2,50 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(AppSettings.self) private var settings
-    @State private var tokenDraft = ""
-    @State private var verifying = false
-    @State private var verifyResult: String?
     @State private var cacheMessage: String?
 
     var body: some View {
         @Bindable var s = settings
         Form {
             Section {
-                SecureField("ghp_… / github_pat_…", text: $tokenDraft)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                HStack {
-                    Button("Salva token") {
-                        settings.token = tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                        verify()
-                    }
-                    .disabled(tokenDraft.isEmpty)
-                    Spacer()
-                    if verifying { ProgressView() }
-                    else if settings.hasToken { Button("Verifica") { verify() } }
+                Picker("Esecuzione degli step run:", selection: $s.shellEngine) {
+                    ForEach(ShellEngine.allCases) { Text($0.label).tag($0) }
                 }
-                if let r = verifyResult { Text(r).font(.caption) }
-                if settings.hasToken {
-                    Button("Rimuovi token", role: .destructive) { settings.token = ""; tokenDraft = ""; verifyResult = nil }
+                Stepper("Memoria VM: \(settings.vmMemoryMB) MB", value: $s.vmMemoryMB, in: 256...2048, step: 128)
+                Toggle("Avvia la VM all'apertura dell'app", isOn: $s.bootVMOnLaunch)
+                NavigationLink { VMStatusView() } label: {
+                    LabeledContent("Stato VM Linux", value: LinuxVM.shared.state.label)
                 }
-            } header: { Text("Token GitHub") } footer: {
-                Text("Token classic: scope **repo** e **workflow**. Fine-grained: Contents, Actions, Workflows, Secrets, Variables in lettura/scrittura e Administration (per creare repository). Il token è salvato nel Portachiavi.")
+            } header: { Text("Motore di esecuzione") } footer: {
+                Text("La VM Linux (RISC-V 64, Alpine) gira interamente nell'app: bash, git, python, node e gli altri pacchetti inclusi sono programmi Linux veri. La memoria si applica al successivo avvio della VM.")
             }
 
-            Section("Repository di destinazione") {
-                TextField("Owner (vuoto = \(settings.login.isEmpty ? "il tuo utente" : settings.login))", text: $s.defaultOwner)
+            Section("Contesto simulato") {
+                TextField("Owner del repository (github.repository_owner)", text: $s.repositoryOwner)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
-                TextField("Prefisso nome repository", text: $s.repoPrefix)
+                TextField("Utente (github.actor)", text: $s.actor)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
-                Toggle("Repository privati", isOn: $s.privateRepos)
-                Toggle("Crea il repository se non esiste", isOn: $s.autoCreateRepo)
-                Toggle("Sincronizza secrets e variabili prima dell'avvio", isOn: $s.syncSecrets)
             }
 
-            KeyValueEditor(title: "Secrets (locali + sincronizzabili)", values: $s.localSecrets, secure: true)
+            KeyValueEditor(title: "Secrets (secrets.*)", values: $s.localSecrets, secure: true)
             KeyValueEditor(title: "Variabili (vars.*)", values: $s.localVariables)
 
-            Section("Esecuzione sul dispositivo") {
-                Picker("Azioni JavaScript/Docker", selection: $s.unsupportedPolicy) {
+            Section("Esecuzione") {
+                Picker("Azioni Docker / non eseguibili", selection: $s.unsupportedPolicy) {
                     ForEach(LocalRunOptions.UnsupportedPolicy.allCases) { Text($0.label).tag($0) }
                 }
-                Toggle("Log di debug", isOn: $s.debugLogs)
-                Button("Svuota cache (azioni scaricate, actions/cache, run locali)") { clearCaches() }
+                Toggle("Log di debug (ACTIONS_STEP_DEBUG)", isOn: $s.debugLogs)
+                Button("Svuota cache (azioni scaricate, actions/cache, run)") { clearCaches() }
                 if let m = cacheMessage { Text(m).font(.caption).foregroundStyle(.secondary) }
             }
 
-            Section("Come funziona") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("**Esegui su GitHub** — fedeltà totale: il contenuto dello ZIP viene caricato in un repository (Git Data API) e il workflow gira sui runner ufficiali GitHub (macOS con Xcode, Ubuntu, Windows). L'app segue la run, mostra i log, le annotazioni e scarica gli artifact (es. l'IPA).")
-                    Text("**Esegui sul dispositivo** — iOS vieta di avviare processi esterni, quindi l'app include un motore completo: parser YAML, espressioni `${{ }}` (tutte le funzioni, incluso case()), contesti, matrix include/exclude, needs, if/always/failure, env/GITHUB_ENV/GITHUB_OUTPUT/GITHUB_PATH/STEP_SUMMARY, comandi ::, maschere dei secrets, azioni composite (anche remote), reusable workflow, checkout/artifact/cache emulati e un interprete bash con oltre 100 comandi. Gli strumenti di sistema (xcodebuild, node, docker…) non possono esistere su iOS: quegli step falliscono con un messaggio chiaro.")
-                }
-                .font(.footnote)
-            }
-
             Section("Info") {
-                LabeledContent("Versione", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0")
-                if !settings.tokenScopes.isEmpty { LabeledContent("Scope token", value: settings.tokenScopes.joined(separator: ", ")) }
+                LabeledContent("Versione", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.0")
+                LabeledContent("Dipendenze esterne", value: "nessuna")
+                LabeledContent("Account / token", value: "non richiesti")
             }
         }
         .navigationTitle("Impostazioni")
-        .onAppear { tokenDraft = settings.token }
-    }
-
-    private func verify() {
-        verifying = true
-        verifyResult = nil
-        let token = settings.token
-        Task {
-            do {
-                let (user, scopes) = try await GitHubAPI(token: token).currentUser()
-                settings.login = user.login
-                settings.tokenScopes = scopes
-                var msg = "✅ Autenticato come \(user.login)"
-                if !scopes.isEmpty {
-                    let missing = ["repo", "workflow"].filter { !scopes.contains($0) }
-                    if !missing.isEmpty { msg += "\n⚠️ Scope mancanti: \(missing.joined(separator: ", "))" }
-                } else {
-                    msg += " (token fine-grained: verifica i permessi Contents/Actions/Workflows)"
-                }
-                verifyResult = msg
-            } catch {
-                verifyResult = "❌ \(error.localizedDescription)"
-            }
-            verifying = false
-        }
     }
 
     private func clearCaches() {
@@ -103,5 +56,135 @@ struct SettingsView: View {
             try? fm.removeItem(at: dir)
         }
         cacheMessage = "Liberati \(Format.bytes(freed))"
+    }
+}
+
+struct VMStatusView: View {
+    private var vm: LinuxVM { LinuxVM.shared }
+    @Environment(AppSettings.self) private var settings
+    @State private var packages: [String] = []
+
+    var body: some View {
+        List {
+            Section {
+                LabeledContent("Stato", value: vm.state.label)
+                if !vm.kernel.isEmpty { LabeledContent("Kernel", value: "Linux \(vm.kernel) (riscv64)") }
+                if vm.isReady {
+                    LabeledContent("Cartella condivisa (9p)", value: vm.has9p ? "attiva" : "non disponibile")
+                    LabeledContent("Rete (slirp)", value: vm.hasNetwork ? "attiva" : "non disponibile")
+                    LabeledContent("Avvio", value: Format.duration(vm.bootSeconds))
+                }
+                if vm.state == .stopped {
+                    Button("Avvia ora") {
+                        let mem = settings.vmMemoryMB
+                        Task.detached { try? await LinuxVM.shared.boot(memoryMB: mem) }
+                    }
+                }
+            }
+            if !packages.isEmpty {
+                Section("Pacchetti Alpine inclusi (\(packages.count))") {
+                    Text(packages.joined(separator: " ")).font(.caption.monospaced())
+                }
+            }
+            Section("Console di avvio") {
+                ForEach(Array(vm.bootLog.suffix(400).enumerated()), id: \.offset) { _, l in
+                    Text(l).font(.caption2.monospaced()).textSelection(.enabled)
+                }
+            }
+        }
+        .navigationTitle("VM Linux")
+        .onAppear {
+            if let u = Bundle.main.url(forResource: "packages", withExtension: "txt"),
+               let t = try? String(contentsOf: u, encoding: .utf8) {
+                packages = t.split(separator: "\n").map(String.init)
+            }
+        }
+    }
+}
+
+/// Terminale semplice verso la VM Linux (un comando alla volta, la cartella corrente viene mantenuta).
+struct TerminalView: View {
+    @Environment(AppSettings.self) private var settings
+    @State private var lines: [LogLine] = []
+    @State private var command = ""
+    @State private var cwd = "/root"
+    @State private var running = false
+    @State private var counter = 0
+
+    private var vm: LinuxVM { LinuxVM.shared }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if !vm.isSupported {
+                ContentUnavailableView("VM Linux non inclusa", systemImage: "terminal",
+                                       description: Text(LinuxVM.unavailabilityReason() ?? ""))
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(lines) { LogLineRow(line: $0) }
+                            Color.clear.frame(height: 1).id("end")
+                        }
+                        .padding(.horizontal, 8)
+                    }
+                    .onChange(of: lines.count) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
+                }
+                Divider()
+                HStack {
+                    Text("\(cwd) $").font(.footnote.monospaced()).foregroundStyle(.secondary)
+                    TextField("comando", text: $command)
+                        .font(.footnote.monospaced())
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .onSubmit(run)
+                        .disabled(running)
+                    if running {
+                        Button { vm.interrupt() } label: { Image(systemName: "stop.circle.fill") }
+                    } else {
+                        Button(action: run) { Image(systemName: "return") }.disabled(command.isEmpty)
+                    }
+                }
+                .padding(8)
+            }
+        }
+        .navigationTitle("Linux")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { lines.removeAll() } label: { Image(systemName: "trash") }
+            }
+        }
+    }
+
+    private func append(_ text: String, _ kind: LogLine.Kind) {
+        counter += 1
+        lines.append(LogLine(id: counter, text: text, kind: kind, date: Date()))
+        if lines.count > 5000 { lines.removeFirst(lines.count - 5000) }
+    }
+
+    private func run() {
+        let cmd = command.trimmingCharacters(in: .whitespaces)
+        guard !cmd.isEmpty, !running else { return }
+        command = ""
+        append("\(cwd) $ \(cmd)", .command)
+        running = true
+        let dir = cwd
+        let mem = settings.vmMemoryMB
+        Task {
+            do {
+                if !LinuxVM.shared.isReady { append("Avvio della VM…", .info) }
+                try await LinuxVM.shared.boot(memoryMB: mem)
+                let script = "cd \(LinuxVM.shQuote(dir)) 2>/dev/null || cd /root\nexport HOME=/root TERM=dumb\n\(cmd)\nrc=$?\necho \"__AR_CWD__$(pwd)\"\nexit $rc"
+                let rc = try await LinuxVM.shared.runCommandLine(script) { line in
+                    DispatchQueue.main.async {
+                        if line.hasPrefix("__AR_CWD__") { cwd = String(line.dropFirst(10)) } else { append(line, .output) }
+                    }
+                }
+                if rc != 0 { append("exit \(rc)", .warning) }
+            } catch {
+                append(error.localizedDescription, .error)
+            }
+            running = false
+        }
     }
 }

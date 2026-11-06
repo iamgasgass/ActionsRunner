@@ -92,18 +92,27 @@ struct ActionMetadata {
     }
 }
 
-/// Scarica le azioni remote (zipball del repository al ref indicato) con cache locale.
+/// Scarica le azioni remote (archivio pubblico del repository al ref indicato) con cache locale.
+/// Nessun token o account: è lo stesso download anonimo che fa il runner di GitHub.
 final class ActionFetcher {
-    let api: GitHubAPI
     let cacheRoot: URL
+    let session: URLSession
 
-    init(token: String?) {
-        api = GitHubAPI(token: token)
+    init() {
         cacheRoot = AppPaths.actionsCache
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 60
+        cfg.timeoutIntervalForResource = 600
+        cfg.httpAdditionalHeaders = ["User-Agent": "ActionsRunner-iOS/2.0"]
+        session = URLSession(configuration: cfg)
     }
 
     func directory(owner: String, repo: String, ref: String) -> URL {
         cacheRoot.appendingPathComponent("\(owner.lowercased())/\(repo.lowercased())/\(ref)", isDirectory: true)
+    }
+
+    func isCached(owner: String, repo: String, ref: String) -> Bool {
+        FileManager.default.fileExists(atPath: directory(owner: owner, repo: repo, ref: ref).appendingPathComponent(".actionsrunner-complete").path)
     }
 
     /// Restituisce la cartella della repo dell'azione (scaricandola se necessario).
@@ -116,12 +125,25 @@ final class ActionFetcher {
             return dir
         }
         log("Download action repository '\(owner)/\(repo)@\(ref)'")
+        let encodedRef = ref.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ref
+        guard let url = URL(string: "https://codeload.github.com/\(owner)/\(repo)/zip/\(encodedRef)") else {
+            throw ExpressionError(message: "Riferimento non valido \(owner)/\(repo)@\(ref)")
+        }
+        var (tmp, resp) = try await session.download(from: url)
+        if let http = resp as? HTTPURLResponse, http.statusCode == 404,
+           let alt = URL(string: "https://github.com/\(owner)/\(repo)/archive/\(encodedRef).zip") {
+            (tmp, resp) = try await session.download(from: alt)
+        }
+        if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw ExpressionError(message: "Impossibile scaricare \(owner)/\(repo)@\(ref) (HTTP \(http.statusCode)). Serve una connessione Internet per le azioni non ancora in cache.")
+        }
         let tmpZip = AppPaths.temp.appendingPathComponent("action-\(UUID().uuidString).zip")
-        try await api.download("repos/\(owner)/\(repo)/zipball/\(ref)", to: tmpZip)
+        try? fm.removeItem(at: tmpZip)
+        try fm.moveItem(at: tmp, to: tmpZip)
         let tmpDir = AppPaths.temp.appendingPathComponent("action-\(UUID().uuidString)")
         try ZipUtil.unzip(tmpZip, to: tmpDir)
         try? fm.removeItem(at: tmpZip)
-        // Lo zipball contiene una cartella radice "owner-repo-sha/"
+        // L'archivio contiene una cartella radice "repo-ref/"
         let entries = try fm.contentsOfDirectory(at: tmpDir, includingPropertiesForKeys: nil)
         let root = entries.count == 1 && FileCommands.isDir(entries[0]) ? entries[0] : tmpDir
         try? fm.removeItem(at: dir)

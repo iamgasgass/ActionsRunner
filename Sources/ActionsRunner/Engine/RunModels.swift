@@ -134,3 +134,17 @@ final class LocalRunModel: Identifiable {
 func onMain(_ block: @escaping () -> Void) {
     if Thread.isMainThread { block() } else { DispatchQueue.main.async(execute: block) }
 }
+
+enum ISODate {
+    static let formatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+    static func parse(_ s: String?) -> Date? { s.flatMap { formatter.date(from: $0) } }
+}
+
+/// Esegue in modo sincrono sul main thread (per leggere stato osservabile da un thread di lavoro).
+func onMainSync(_ block: () -> Void) {
+    if Thread.isMainThread { block() } else { DispatchQueue.main.sync(execute: block) }
+}

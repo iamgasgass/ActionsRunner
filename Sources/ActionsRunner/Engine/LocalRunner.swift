@@ -14,7 +14,6 @@ struct LocalRunOptions {
     var inputs: [String: String] = [:]
     var secrets: [String: String] = [:]
     var variables: [String: String] = [:]
-    var githubToken: String?
     var repositoryOwner = "local"
     var repositoryName = "repo"
     var actor = "ios-user"
@@ -22,6 +21,21 @@ struct LocalRunOptions {
     var onlyJob: String?
     var unsupportedActions: UnsupportedPolicy = .fail
     var runNumber = 1
+    var shellEngine: ShellEngine = .auto
+    var vmMemoryMB = 512
+}
+
+/// Dove eseguire gli step `run:`.
+enum ShellEngine: String, CaseIterable, Identifiable {
+    case auto, linux, builtin
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .auto: return "Automatico (VM Linux se disponibile)"
+        case .linux: return "Solo VM Linux"
+        case .builtin: return "Interprete integrato"
+        }
+    }
 }
 
 /// Ambito di valutazione degli step (job principale o azione composita).
@@ -86,7 +100,7 @@ final class LocalWorkflowRunner {
     private var jobResults: [String: (result: String, outputs: OrderedObject)] = [:]
     private var sha: String
     private var runId: Int
-    private lazy var fetcher = ActionFetcher(token: options.githubToken)
+    private lazy var fetcher = ActionFetcher()
     private var jobCounter = 0
     private var annotations: [RunAnnotation] = []
 
@@ -269,7 +283,7 @@ final class LocalWorkflowRunner {
         g["secret_source"] = .string("Actions")
         g["server_url"] = .string("https://github.com")
         g["sha"] = .string(sha)
-        g["token"] = .string(options.githubToken ?? "")
+        g["token"] = .string(options.secrets["GITHUB_TOKEN"] ?? "")
         g["triggering_actor"] = .string(options.actor)
         g["workflow"] = .string(workflow.name)
         g["workflow_ref"] = .string("\(repoFull)/\(workflow.path)@\(ref)")
@@ -471,7 +485,6 @@ final class LocalWorkflowRunner {
                                 timeoutMinutes: (timeout ?? 360).isNaN ? 360 : (timeout ?? 360))
         exec.commands.debug = options.debug
         for (_, v) in options.secrets where !v.isEmpty { exec.commands.addMask(v) }
-        if let t = options.githubToken, !t.isEmpty { exec.commands.addMask(t) }
         exec.github["workspace"] = .string(exec.workspace.path)
 
         let setup = StepRunModel(name: "Set up job")
@@ -642,7 +655,7 @@ final class LocalWorkflowRunner {
 
     private func secretsObject() -> OrderedObject {
         var o = stringsObject(options.secrets)
-        o["GITHUB_TOKEN"] = .string(options.githubToken ?? "")
+        if o["GITHUB_TOKEN"] == nil { o["GITHUB_TOKEN"] = .string("") }
         return o
     }
 
@@ -987,6 +1000,14 @@ final class LocalWorkflowRunner {
 
     private func runScriptStep(script: String, step: Step, exec: JobExecution, scope: StepScope, stepEnv: OrderedObject,
                                model sm: StepRunModel, ctx: EvaluationContext, deadline: Date) async -> (Bool, OrderedObject) {
+        switch await prepareVM(sm) {
+        case .vm:
+            return await runScriptInVM(script: script, step: step, exec: exec, scope: scope, stepEnv: stepEnv, model: sm, ctx: ctx, deadline: deadline)
+        case .fail:
+            return (false, OrderedObject())
+        case .builtin:
+            break
+        }
         // shell: step > defaults.run.shell (job/workflow) > default
         var shellSpec = step.shell ?? exec.defaultsRun["shell"]?.stringValue ?? ""
         if shellSpec.contains("${{") { shellSpec = (try? ExpressionTemplate.evaluateString(shellSpec, ctx)) ?? shellSpec }
@@ -1188,9 +1209,12 @@ final class LocalWorkflowRunner {
             inputsObj[k] = v
         }
 
+        if meta.isNode {
+            return await runNodeAction(meta, ref: ref, inputs: inputsObj, step: step, exec: exec, stepEnv: stepEnv, model: sm, deadline: deadline)
+        }
         guard meta.isComposite else {
-            let kind = meta.isNode ? "JavaScript (\(meta.using))" : (meta.isDocker ? "Docker" : meta.using)
-            emit(sm, "##[error]L'azione '\(ref.raw)' è un'azione \(kind): richiede Node.js/Docker, non eseguibili nella sandbox di iOS. Usa \"Esegui su GitHub\" per l'esecuzione reale.", .error)
+            let kind = meta.isDocker ? "Docker" : meta.using
+            emit(sm, "##[error]L'azione '\(ref.raw)' è un'azione \(kind): i container Docker non possono essere eseguiti dentro l'app.", .error)
             return unsupported(sm)
         }
 
@@ -1216,6 +1240,227 @@ final class LocalWorkflowRunner {
             if let v = spec["value"]?.scalarString, let s = try? ExpressionTemplate.evaluateString(v, outCtx) { outputs[name] = .string(s) }
         }
         return (!inner.failed, outputs)
+    }
+
+
+    // MARK: - VM Linux
+
+    enum EngineChoice { case vm, builtin, fail }
+
+    /// Decide dove eseguire lo step e, se serve, avvia la VM.
+    private func prepareVM(_ sm: StepRunModel) async -> EngineChoice {
+        if options.shellEngine == .builtin { return .builtin }
+        let vm = LinuxVM.shared
+        let strict = options.shellEngine == .linux
+        guard vm.isSupported else {
+            if strict {
+                emit(sm, "##[error]VM Linux non disponibile in questa build: \(LinuxVM.unavailabilityReason() ?? "")", .error)
+                return .fail
+            }
+            return .builtin
+        }
+        if !vm.isReady {
+            emit(sm, "Avvio della VM Linux integrata (RISC-V 64, Alpine)… il primo avvio può richiedere qualche minuto.", .info)
+        }
+        do {
+            try await vm.boot(memoryMB: options.vmMemoryMB)
+        } catch {
+            emit(sm, (strict ? "##[error]" : "Warning: ") + "VM Linux non avviata: \(error.localizedDescription)" + (strict ? "" : " — uso l'interprete integrato."), strict ? .error : .warning)
+            return strict ? .fail : .builtin
+        }
+        var shared = false
+        onMainSync { shared = vm.has9p }
+        if !shared {
+            emit(sm, (strict ? "##[error]" : "Warning: ") + "La VM non ha accesso alla cartella condivisa (virtio-9p): \(strict ? "impossibile eseguire lo step." : "uso l'interprete integrato.")", strict ? .error : .warning)
+            return strict ? .fail : .builtin
+        }
+        return .vm
+    }
+
+    /// Comando di shell secondo le regole del runner Linux di GitHub.
+    private func vmShellCommand(_ spec: String) -> (template: String, display: String, ext: String)? {
+        let trimmed = spec.trimmingCharacters(in: .whitespaces)
+        let name = trimmed.split(separator: " ").first.map(String.init) ?? ""
+        if trimmed.isEmpty { return ("bash -e {0}", "/usr/bin/bash -e {0}", "sh") }
+        if trimmed.contains("{0}") {
+            return (trimmed, trimmed, name.hasPrefix("python") ? "py" : (name == "node" ? "js" : "sh"))
+        }
+        switch name {
+        case "bash": return ("bash --noprofile --norc -eo pipefail {0}", "/usr/bin/bash --noprofile --norc -eo pipefail {0}", "sh")
+        case "sh": return ("sh -e {0}", "/usr/bin/sh -e {0}", "sh")
+        case "python", "python3": return ("python {0}", "/usr/bin/python {0}", "py")
+        case "node": return ("node {0}", "/usr/bin/node {0}", "js")
+        case "pwsh": return ("pwsh -command \". '{0}'\"", "pwsh -command \". '{0}'\"", "ps1")
+        case "powershell", "cmd": return nil
+        default: return ("\(trimmed) {0}", "\(trimmed) {0}", "sh")
+        }
+    }
+
+    /// Esegue una riga di comando nella VM con l'ambiente indicato. Restituisce l'exit code.
+    private func runCommandInVM(_ command: String, env: [String: String], cwd: URL, exec: JobExecution,
+                                model sm: StepRunModel, deadline: Date, sink: TextSink) async -> Int32 {
+        let jr = exec.root.path
+        let jobRootGuest = LinuxVM.guestPath(jr)
+        var w = "#!/bin/sh\n"
+        w += "JR=\(LinuxVM.shQuote(jobRootGuest))\n"
+        w += "if [ \"$(cat /run/ar-job 2>/dev/null)\" != \"$JR\" ]; then\n"
+        w += "  umount /home/runner 2>/dev/null; mkdir -p /home/runner\n"
+        w += "  mount --bind \"$JR\" /home/runner && echo \"$JR\" > /run/ar-job || { echo 'Impossibile montare la cartella del job'; exit 97; }\n"
+        w += "fi\n"
+        w += "cd \(LinuxVM.shQuote(LinuxVM.guestPath(cwd.path, jobRoot: jr))) || exit 98\n"
+        w += "exec env -i"
+        for k in env.keys.sorted() where !k.isEmpty && !k.contains("=") {
+            let v = LinuxVM.translate(env[k] ?? "", jobRoot: jr)
+            w += " \\\n  " + LinuxVM.shQuote("\(k)=\(v)")
+        }
+        w += " \\\n  /bin/sh -c " + LinuxVM.shQuote(command) + "\n"
+        let wrapper = exec.temp.appendingPathComponent("ar-\(UUID().uuidString.lowercased()).sh")
+        do { try w.write(to: wrapper, atomically: true, encoding: .utf8) } catch {
+            emit(sm, "##[error]Impossibile preparare lo script per la VM: \(error.localizedDescription)", .error)
+            return 1
+        }
+        defer { try? FileManager.default.removeItem(at: wrapper) }
+        do {
+            return try await LinuxVM.shared.run(hostScript: wrapper, jobRoot: nil, deadline: deadline,
+                                                isCancelled: { [weak self] in self?.interruptCurrentStep ?? true },
+                                                onLine: { line in sink.write(line + "\n") })
+        } catch {
+            emit(sm, "##[error]Errore della VM Linux: \(error.localizedDescription)", .error)
+            return 1
+        }
+    }
+
+    private func runScriptInVM(script: String, step: Step, exec: JobExecution, scope: StepScope, stepEnv: OrderedObject,
+                               model sm: StepRunModel, ctx: EvaluationContext, deadline: Date) async -> (Bool, OrderedObject) {
+        var shellSpec = step.shell ?? exec.defaultsRun["shell"]?.stringValue ?? ""
+        if shellSpec.contains("${{") { shellSpec = (try? ExpressionTemplate.evaluateString(shellSpec, ctx)) ?? shellSpec }
+        guard let shell = vmShellCommand(shellSpec) else {
+            emit(sm, "##[error]La shell '\(shellSpec)' è disponibile solo su runner Windows.", .error)
+            return (false, OrderedObject())
+        }
+        var wd = step.workingDirectory ?? exec.defaultsRun["working-directory"]?.stringValue
+        if let w = wd, w.contains("${{") { wd = try? ExpressionTemplate.evaluateString(w, ctx) }
+        var cwd = exec.workspace
+        if let w = wd, !w.isEmpty {
+            cwd = w.hasPrefix("/") ? URL(fileURLWithPath: w) : exec.workspace.appendingPathComponent(w)
+        }
+
+        let lines = script.components(separatedBy: "\n")
+        emit(sm, "Run \(lines.first ?? "")", .groupStart)
+        for l in lines.dropLast(script.hasSuffix("\n") ? 1 : 0) { emit(sm, exec.commands.mask(l), .command) }
+        emit(sm, "shell: \(shell.display)", .info)
+        let shownEnv = exec.env.merging(exec.fileEnv).merging(stepEnv)
+        if !shownEnv.isEmpty {
+            emit(sm, "env:", .info)
+            for (k, v) in shownEnv.pairs { emit(sm, "  \(k): \(exec.commands.mask(v.stringValue))", .info) }
+        }
+        emit(sm, "", .groupEnd)
+
+        let jr = exec.root.path
+        let scriptFile = exec.temp.appendingPathComponent("\(UUID().uuidString.lowercased()).\(shell.ext)")
+        do { try LinuxVM.translate(script, jobRoot: jr).write(to: scriptFile, atomically: true, encoding: .utf8) } catch {
+            emit(sm, "##[error]\(error.localizedDescription)", .error)
+            return (false, OrderedObject())
+        }
+        defer { try? FileManager.default.removeItem(at: scriptFile) }
+
+        let files = makeCommandFiles(exec)
+        var env = processEnvironment(exec: exec, scope: scope, stepEnv: stepEnv, files: files, action: step.stepId ?? "__run_\(step.index)")
+        env["HOME"] = exec.root.path
+        env["PWD"] = cwd.path
+        let outBox = OutputBox()
+        let (sink, flush) = makeSink(sm, exec: exec, scope: scope, outputs: { k, v in outBox.outputs[k] = .string(v) }, state: { _, _ in })
+        let command = shell.template.replacingOccurrences(of: "{0}", with: LinuxVM.shQuote(LinuxVM.guestPath(scriptFile.path, jobRoot: jr)))
+        let status = await runCommandInVM(command, env: env, cwd: cwd, exec: exec, model: sm, deadline: deadline, sink: sink)
+        flush()
+
+        var outputs = OrderedObject()
+        var st = OrderedObject()
+        var ok = applyCommandFiles(files, exec: exec, model: sm, outputs: &outputs, state: &st)
+        outputs.merge(outBox.outputs)
+        if status != 0 {
+            emit(sm, "##[error]Process completed with exit code \(status).", .error)
+            ok = false
+        }
+        return (ok, outputs)
+    }
+
+    /// Azioni JavaScript (runs.using: node*): eseguite con il Node.js della VM, come fa il runner.
+    private func runNodeAction(_ meta: ActionMetadata, ref: ActionReference, inputs: OrderedObject, step: Step, exec: JobExecution,
+                               stepEnv: OrderedObject, model sm: StepRunModel, deadline: Date) async -> (Bool, OrderedObject) {
+        guard let main = meta.main else {
+            emit(sm, "##[error]action.yml non specifica runs.main", .error)
+            return (false, OrderedObject())
+        }
+        let previousEngine = options.shellEngine
+        if previousEngine == .builtin {
+            emit(sm, "##[error]L'azione '\(ref.raw)' è un'azione JavaScript (\(meta.using)): serve la VM Linux (impostazione motore: interprete integrato).", .error)
+            return unsupported(sm)
+        }
+        switch await prepareVM(sm) {
+        case .vm: break
+        default:
+            emit(sm, "##[error]L'azione JavaScript '\(ref.raw)' richiede Node.js nella VM Linux, che non è disponibile.", .error)
+            return unsupported(sm)
+        }
+        let actionScope = StepScope(isComposite: true)
+        actionScope.actionPath = meta.directory.path
+        if case .remote(let o, let r, _, let rf) = ref.kind { actionScope.actionRepository = "\(o)/\(r)"; actionScope.actionRef = rf }
+        let stateKey = "\(ref.key)#\(step.index)#\(UUID().uuidString)"
+
+        func runPhase(_ script: String, model pm: StepRunModel, state: OrderedObject, deadline: Date) async -> (Bool, OrderedObject, OrderedObject) {
+            let files = makeCommandFiles(exec)
+            var env = processEnvironment(exec: exec, scope: actionScope, stepEnv: stepEnv, files: files, action: step.stepId ?? "__\(ref.key)")
+            env["HOME"] = exec.root.path
+            for (k, v) in inputs.pairs {
+                env["INPUT_" + k.replacingOccurrences(of: " ", with: "_").uppercased()] = v.stringValue
+            }
+            for (k, v) in state.pairs { env["STATE_" + k] = v.stringValue }
+            let outBox = OutputBox()
+            let stateBox = OutputBox()
+            let (sink, flush) = makeSink(pm, exec: exec, scope: actionScope, outputs: { k, v in outBox.outputs[k] = .string(v) },
+                                         state: { k, v in stateBox.outputs[k] = .string(v) })
+            let path = LinuxVM.guestPath(meta.directory.appendingPathComponent(script).path, jobRoot: exec.root.path)
+            let status = await runCommandInVM("node \(LinuxVM.shQuote(path))", env: env, cwd: exec.workspace, exec: exec,
+                                              model: pm, deadline: deadline, sink: sink)
+            flush()
+            var outputs = OrderedObject()
+            var st = OrderedObject()
+            var ok = applyCommandFiles(files, exec: exec, model: pm, outputs: &outputs, state: &st)
+            outputs.merge(outBox.outputs)
+            st.merge(stateBox.outputs)
+            if status != 0 {
+                emit(pm, "##[error]Node.js ha terminato con exit code \(status).", .error)
+                ok = false
+            }
+            return (ok, outputs, st)
+        }
+
+        var state = OrderedObject()
+        if let pre = meta.pre {
+            var c = makeContext(exec, actionScope)
+            c.status = StatusState(succeeded: !exec.failed, failed: exec.failed, cancelled: cancelled)
+            if (try? ExpressionTemplate.evaluateCondition(meta.preIf ?? "always()", c)) ?? true {
+                let (_, _, s) = await runPhase(pre, model: sm, state: state, deadline: deadline)
+                state.merge(s)
+            }
+        }
+        emit(sm, "Esecuzione di \(meta.name) con Node.js nella VM Linux (\(meta.using))", .info)
+        let (ok, outputs, s) = await runPhase(main, model: sm, state: state, deadline: deadline)
+        state.merge(s)
+        exec.actionState[stateKey] = state
+
+        if let post = meta.post {
+            let condition = meta.postIf ?? "always()"
+            let savedState = state
+            exec.postSteps.append((name: "Post \(sm.name)", condition: condition, run: { [weak self] pm in
+                guard let self = self else { return false }
+                let (pok, _, _) = await runPhase(post, model: pm, state: savedState, deadline: exec.deadline)
+                _ = self
+                return pok
+            }))
+        }
+        return (ok, outputs)
     }
 
     // MARK: - Reusable workflow
