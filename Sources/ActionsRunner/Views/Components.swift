@@ -165,37 +165,83 @@ struct LogLineRow: View {
     }
 }
 
+/// Editor di coppie nome/valore (secrets, variabili) in una scheda di vetro.
 struct KeyValueEditor: View {
     let title: String
+    var subtitle: String? = nil
+    var symbol: String = "key.fill"
     @Binding var values: [String: String]
     var secure = false
     @State private var newKey = ""
     @State private var newValue = ""
 
     var body: some View {
-        Section(title) {
-            ForEach(values.keys.sorted(), id: \.self) { k in
-                HStack {
-                    Text(k).font(.system(.body, design: .monospaced))
-                    Spacer()
-                    Text(secure ? "••••••" : (values[k] ?? "")).foregroundStyle(.secondary).lineLimit(1)
+        VStack(alignment: .leading, spacing: 14) {
+            GlassSectionHeading(title: title, subtitle: subtitle, symbol: symbol)
+
+            if !values.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(Array(values.keys.sorted().enumerated()), id: \.element) { idx, k in
+                        if idx > 0 { GlassDivider() }
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(k)
+                                    .font(.system(.subheadline, design: .monospaced, weight: .semibold))
+                                Text(secure ? "••••••••" : (values[k] ?? ""))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer(minLength: 0)
+                            Button(role: .destructive) {
+                                withAnimation(.easeInOut(duration: 0.2)) { _ = values.removeValue(forKey: k) }
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                                    .font(.system(size: 20))
+                                    .foregroundStyle(.red.opacity(0.85))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Elimina \(k)")
+                        }
+                        .padding(.vertical, 10)
+                    }
                 }
-                .swipeActions { Button("Elimina", role: .destructive) { values.removeValue(forKey: k) } }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 4)
+                .liquidGlassCard(cornerRadius: 18, borderOpacity: 0.10)
             }
-            HStack {
+
+            GlassFieldLabel("Nome")
+            GlassTextFieldSurface {
                 TextField("NOME", text: $newKey)
+                    .font(.system(.subheadline, design: .monospaced))
                     .textInputAutocapitalization(.characters)
                     .autocorrectionDisabled()
-                    .font(.system(.body, design: .monospaced))
-                if secure { SecureField("valore", text: $newValue) } else { TextField("valore", text: $newValue).autocorrectionDisabled() }
-                Button {
-                    let k = newKey.trimmingCharacters(in: .whitespaces)
-                    guard !k.isEmpty else { return }
-                    values[k] = newValue
-                    newKey = ""; newValue = ""
-                } label: { Image(systemName: "plus.circle.fill") }
-                .disabled(newKey.trimmingCharacters(in: .whitespaces).isEmpty)
             }
+            GlassFieldLabel("Valore")
+            GlassTextFieldSurface {
+                if secure {
+                    SecureField("valore", text: $newValue)
+                        .font(.system(.subheadline, design: .monospaced))
+                } else {
+                    TextField("valore", text: $newValue)
+                        .font(.system(.subheadline, design: .monospaced))
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                }
+            }
+            Button {
+                let k = newKey.trimmingCharacters(in: .whitespaces)
+                guard !k.isEmpty else { return }
+                withAnimation(.easeInOut(duration: 0.2)) { values[k] = newValue }
+                newKey = ""
+                newValue = ""
+            } label: {
+                Label("Aggiungi", systemImage: "plus")
+            }
+            .buttonStyle(LiquidGlassButtonStyle())
+            .disabled(newKey.trimmingCharacters(in: .whitespaces).isEmpty)
         }
+        .glassSection()
     }
 }

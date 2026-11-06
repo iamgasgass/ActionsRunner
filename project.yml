@@ -45,6 +45,7 @@ targets:
         LSRequiresIPhoneOS: true
         UILaunchScreen:
           UIColorName: LaunchBackground
+        UIUserInterfaceStyle: Dark
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UISupportedInterfaceOrientations:

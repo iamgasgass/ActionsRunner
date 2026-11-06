@@ -6,38 +6,64 @@ struct ProjectsView: View {
     @State private var showImporter = false
 
     var body: some View {
-        List {
-            if store.projects.isEmpty && !store.isImporting {
-                ContentUnavailableView {
-                    Label("Nessun progetto", systemImage: "doc.zipper")
-                } description: {
-                    Text("Importa un file .zip contenente una repository con i workflow in .github/workflows. Puoi anche usare \"Download ZIP\" da GitHub.")
-                } actions: {
-                    Button("Importa ZIP") { showImporter = true }.buttonStyle(.borderedProminent)
-                }
-            }
+        GlassList {
+            GlassHeroCard(eyebrow: "ACTIONS RUNNER", title: "GitHub Actions,\nin tasca.",
+                          subtitle: "Importa una repository ed eseguila sui runner di GitHub")
+                .glassListRow()
+
             if store.isImporting {
-                HStack { ProgressView(); Text("Importazione in corso…") }
-            }
-            if let e = store.importError {
-                Text(e).foregroundStyle(.red).font(.footnote)
-            }
-            ForEach(store.projects) { p in
-                NavigationLink(value: p.id) {
-                    ProjectRow(project: p)
+                HStack(spacing: 13) {
+                    ProgressView().tint(.white)
+                    Text("Importazione in corso…")
+                        .font(.system(.headline, design: .rounded, weight: .semibold))
                 }
+                .glassSection(cornerRadius: 24)
+                .glassListRow()
+            }
+
+            if let e = store.importError {
+                GlassErrorText(message: e).glassListRow()
+            }
+
+            if store.projects.isEmpty && !store.isImporting {
+                GlassEmptyState(symbol: "doc.zipper", title: "Nessun progetto",
+                                message: "Importa un file .zip con una repository che contiene i workflow in .github/workflows. Va bene anche il \"Download ZIP\" di GitHub.")
+                    .glassListRow()
+            } else if !store.projects.isEmpty {
+                GlassListHeader(title: "Progetti", count: store.projects.count, symbol: "shippingbox.fill")
+                    .glassListRow(top: 12)
+            }
+
+            ForEach(store.projects) { p in
+                ProjectRow(project: p)
+                    .overlay { NavigationLink(value: p.id) { EmptyView() }.opacity(0) }
+                    .glassListRow()
             }
             .onDelete { idx in
                 for i in idx { store.delete(store.projects[i]) }
             }
+
+            Button { showImporter = true } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "square.and.arrow.down")
+                    Text("Importa ZIP")
+                }
+            }
+            .buttonStyle(LiquidGlassButtonStyle(prominent: true))
+            .disabled(store.isImporting)
+            .glassListRow(top: 12)
         }
-        .navigationTitle("Actions Runner")
+        .navigationTitle("Progetti")
+        .navigationBarTitleDisplayMode(.large)
         .navigationDestination(for: UUID.self) { id in
             ProjectDetailView(projectId: id)
         }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button { showImporter = true } label: { Label("Importa", systemImage: "plus") }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showImporter = true } label: {
+                    Image(systemName: "plus").font(.system(size: 15, weight: .semibold))
+                }
+                .accessibilityLabel("Importa")
             }
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.zip, .folder], allowsMultipleSelection: false) { result in
@@ -52,17 +78,32 @@ struct ProjectRow: View {
     let project: Project
     var body: some View {
         let workflows = WorkflowParser.loadWorkflows(in: project.repoURL).workflows
-        VStack(alignment: .leading, spacing: 4) {
-            Text(project.name).font(.headline)
-            HStack(spacing: 10) {
-                Label("\(workflows.count)", systemImage: "gearshape.2")
-                Label("\(project.fileCount)", systemImage: "doc")
-                Text(Format.bytes(project.sizeBytes))
+        HStack(spacing: 14) {
+            GlassIconBadge(symbol: "shippingbox", size: 48)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(project.name)
+                    .font(.system(.headline, design: .rounded, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                HStack(spacing: 10) {
+                    Label("\(workflows.count)", systemImage: "gearshape.2")
+                    Label("\(project.fileCount)", systemImage: "doc")
+                    Text(Format.bytes(project.sizeBytes))
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                if let r = project.githubRepo {
+                    Text(r)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            GlassChevron()
         }
-        .padding(.vertical, 2)
+        .glassRow()
     }
 }
 
@@ -78,50 +119,73 @@ struct ProjectDetailView: View {
 
     var body: some View {
         if let project = store.project(projectId) {
-            List {
-                Section {
-                    LabeledContent("File", value: "\(project.fileCount)")
-                    LabeledContent("Dimensione", value: Format.bytes(project.sizeBytes))
-                    LabeledContent("Importato", value: project.importedAt.formatted(date: .abbreviated, time: .shortened))
-                    LabeledContent("Sorgente", value: project.sourceFileName)
-                }
-
-                Section("Workflow (.github/workflows)") {
-                    if workflows.isEmpty && loadErrors.isEmpty {
-                        Text("Nessun workflow trovato. La repo deve contenere file .yml in .github/workflows/.")
-                            .foregroundStyle(.secondary)
+            GlassScreen {
+                VStack(alignment: .leading, spacing: 14) {
+                    GlassSectionHeading(title: project.name, subtitle: project.sourceFileName, symbol: "shippingbox")
+                    GlassDetailRow(title: "File", value: "\(project.fileCount) · \(Format.bytes(project.sizeBytes))", symbol: "doc.on.doc")
+                    GlassDivider()
+                    GlassDetailRow(title: "Importato", value: project.importedAt.formatted(date: .abbreviated, time: .shortened), symbol: "calendar")
+                    if let r = project.githubRepo {
+                        GlassDivider()
+                        GlassDetailRow(title: "Repository GitHub", value: "\(r) · \(project.githubBranch ?? "—")", symbol: "arrow.triangle.branch")
                     }
+                }
+                .glassSection()
+
+                GlassListHeader(title: "Workflow", count: workflows.count, symbol: "gearshape.2.fill")
+
+                if workflows.isEmpty && loadErrors.isEmpty {
+                    GlassEmptyState(symbol: "gearshape.2", title: "Nessun workflow",
+                                    message: "La repository deve contenere file .yml in .github/workflows/.")
+                }
+                LazyVStack(spacing: 12) {
                     ForEach(workflows) { wf in
                         NavigationLink {
                             WorkflowDetailView(project: project, workflow: wf)
                         } label: {
                             WorkflowRow(workflow: wf)
                         }
-                    }
-                    ForEach(loadErrors) { d in
-                        Label(d.message, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red).font(.footnote)
+                        .buttonStyle(.plain)
                     }
                 }
+                ForEach(loadErrors) { d in
+                    GlassErrorText(message: [d.message, d.location].compactMap { $0 }.joined(separator: " · "))
+                }
 
-                Section("Repository") {
+                VStack(alignment: .leading, spacing: 14) {
+                    GlassSectionHeading(title: "Repository", subtitle: "File importati sul dispositivo.", symbol: "folder")
                     NavigationLink {
                         FileBrowserView(root: project.repoURL, url: project.repoURL, title: project.name)
-                    } label: { Label("Sfoglia i file", systemImage: "folder") }
+                    } label: {
+                        Label("Sfoglia i file", systemImage: "folder")
+                    }
+                    .buttonStyle(LiquidGlassButtonStyle())
                     Button {
                         do { exportURL = try store.export(project) } catch { exportError = error.localizedDescription }
-                    } label: { Label("Esporta come ZIP", systemImage: "square.and.arrow.up") }
-                    if let u = exportURL {
-                        ShareLink(item: u) { Label("Condividi \(u.lastPathComponent)", systemImage: "square.and.arrow.up.on.square") }
+                    } label: {
+                        Label("Esporta come ZIP", systemImage: "square.and.arrow.up")
                     }
-                    if let e = exportError { Text(e).foregroundStyle(.red).font(.footnote) }
+                    .buttonStyle(LiquidGlassButtonStyle())
+                    if let u = exportURL {
+                        ShareLink(item: u) {
+                            Label("Condividi \(u.lastPathComponent)", systemImage: "square.and.arrow.up.on.square")
+                        }
+                        .buttonStyle(LiquidGlassButtonStyle(prominent: true))
+                    }
+                    if let e = exportError {
+                        Text(e).font(.footnote).foregroundStyle(.red)
+                    }
                 }
-
+                .glassSection()
             }
             .navigationTitle(project.name)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button { newName = project.name; showRename = true } label: { Image(systemName: "pencil") }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { newName = project.name; showRename = true } label: {
+                        Image(systemName: "pencil").font(.system(size: 15, weight: .semibold))
+                    }
+                    .accessibilityLabel("Rinomina")
                 }
             }
             .alert("Rinomina progetto", isPresented: $showRename) {
@@ -132,7 +196,11 @@ struct ProjectDetailView: View {
             .task { reload(project) }
             .refreshable { reload(project) }
         } else {
-            ContentUnavailableView("Progetto non trovato", systemImage: "questionmark.folder")
+            ZStack {
+                AppGlassBackground()
+                GlassEmptyState(symbol: "questionmark.folder", title: "Progetto non trovato", message: "Il progetto è stato eliminato.")
+                    .padding(18)
+            }
         }
     }
 
@@ -148,20 +216,35 @@ struct WorkflowRow: View {
     var body: some View {
         let errors = workflow.diagnostics.filter { $0.severity == .error }.count
         let warnings = workflow.diagnostics.filter { $0.severity == .warning }.count
-        VStack(alignment: .leading, spacing: 3) {
-            Text(workflow.name).font(.headline)
-            Text(workflow.path).font(.caption.monospaced()).foregroundStyle(.secondary)
-            HStack(spacing: 8) {
-                Text(workflow.eventNames.joined(separator: ", ")).font(.caption2).foregroundStyle(.blue)
-                Text("\(workflow.jobs.count) job").font(.caption2).foregroundStyle(.secondary)
-                if errors > 0 { Label("\(errors)", systemImage: "xmark.octagon.fill").font(.caption2).foregroundStyle(.red) }
-                if warnings > 0 { Label("\(warnings)", systemImage: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange) }
+        HStack(spacing: 14) {
+            GlassIconBadge(symbol: "gearshape.2", size: 48)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(workflow.name)
+                    .font(.system(.headline, design: .rounded, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                Text(workflow.path)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                HStack(spacing: 8) {
+                    Text(workflow.eventNames.joined(separator: ", "))
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+                    Text("\(workflow.jobs.count) job").font(.caption2).foregroundStyle(.secondary)
+                    if errors > 0 { Label("\(errors)", systemImage: "xmark.octagon.fill").font(.caption2).foregroundStyle(.red) }
+                    if warnings > 0 { Label("\(warnings)", systemImage: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange) }
+                }
             }
+            Spacer(minLength: 4)
+            GlassChevron()
         }
+        .glassRow()
     }
 }
 
-// MARK: - File browser
+// MARK: - File
 
 struct FileBrowserView: View {
     let root: URL
@@ -170,20 +253,27 @@ struct FileBrowserView: View {
     @State private var items: [URL] = []
 
     var body: some View {
-        List(items, id: \.self) { item in
-            if AppPaths.isDirectory(item) {
-                NavigationLink {
-                    FileBrowserView(root: root, url: item, title: item.lastPathComponent)
-                } label: { Label(item.lastPathComponent, systemImage: "folder.fill") }
-            } else {
-                NavigationLink {
-                    FileViewer(url: item)
-                } label: {
-                    HStack {
-                        Label(item.lastPathComponent, systemImage: icon(item))
-                        Spacer()
-                        Text(Format.bytes(Int64(((try? FileManager.default.attributesOfItem(atPath: item.path))?[.size] as? NSNumber)?.intValue ?? 0)))
-                            .font(.caption).foregroundStyle(.secondary)
+        GlassScreen(spacing: 12) {
+            if items.isEmpty {
+                GlassEmptyState(symbol: "folder", title: "Cartella vuota", message: url.lastPathComponent)
+            }
+            LazyVStack(spacing: 10) {
+                ForEach(items, id: \.self) { item in
+                    if AppPaths.isDirectory(item) {
+                        NavigationLink {
+                            FileBrowserView(root: root, url: item, title: item.lastPathComponent)
+                        } label: {
+                            fileRow(item, symbol: "folder.fill", detail: nil)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        NavigationLink {
+                            FileViewer(url: item)
+                        } label: {
+                            fileRow(item, symbol: icon(item),
+                                    detail: Format.bytes(Int64(((try? FileManager.default.attributesOfItem(atPath: item.path))?[.size] as? NSNumber)?.intValue ?? 0)))
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -199,6 +289,23 @@ struct FileBrowserView: View {
                 return a.lastPathComponent.localizedStandardCompare(b.lastPathComponent) == .orderedAscending
             }
         }
+    }
+
+    private func fileRow(_ item: URL, symbol: String, detail: String?) -> some View {
+        HStack(spacing: 12) {
+            GlassIconBadge(symbol: symbol, size: 38)
+            Text(item.lastPathComponent)
+                .font(.system(.subheadline, design: .rounded, weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 4)
+            if let detail {
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+            GlassChevron()
+        }
+        .glassRow()
     }
 
     private func icon(_ u: URL) -> String {
@@ -221,29 +328,40 @@ struct FileViewer: View {
     @State private var draft = ""
 
     var body: some View {
-        Group {
-            if editing {
-                TextEditor(text: $draft)
-                    .font(.system(.footnote, design: .monospaced))
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-            } else if let t = text {
-                ScrollView([.vertical, .horizontal]) {
-                    Text(t)
+        ZStack {
+            AppGlassBackground()
+
+            Group {
+                if editing {
+                    TextEditor(text: $draft)
                         .font(.system(.footnote, design: .monospaced))
-                        .textSelection(.enabled)
-                        .padding()
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .scrollContentBackground(.hidden)
+                        .padding(8)
+                        .liquidGlassCard(cornerRadius: 22, borderOpacity: 0.11)
+                        .padding(18)
+                } else if let t = text {
+                    ScrollView([.vertical, .horizontal]) {
+                        Text(t)
+                            .font(.system(.footnote, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(16)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .liquidGlassCard(cornerRadius: 22, borderOpacity: 0.11)
+                    .padding(18)
+                } else {
+                    GlassEmptyState(symbol: "doc", title: "File binario", message: url.lastPathComponent)
+                        .padding(18)
                 }
-            } else {
-                ContentUnavailableView("File binario", systemImage: "doc", description: Text(url.lastPathComponent))
             }
         }
         .navigationTitle(url.lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if text != nil {
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button(editing ? "Salva" : "Modifica") {
                         if editing {
                             try? draft.write(to: url, atomically: true, encoding: .utf8)
@@ -255,7 +373,7 @@ struct FileViewer: View {
                     }
                 }
             }
-            ToolbarItem(placement: .secondaryAction) { ShareLink(item: url) }
+            ToolbarItem(placement: .topBarTrailing) { ShareLink(item: url) }
         }
         .onAppear {
             if let data = try? Data(contentsOf: url), data.count < 5_000_000, !data.prefix(8000).contains(0) {

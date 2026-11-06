@@ -3,38 +3,86 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(AppSettings.self) private var settings
     @State private var cacheMessage: String?
-    @State private var accountLabel = GitHubAPI.stored == nil ? "non collegato" : "collegato"
+    @State private var connected = GitHubAPI.stored != nil
 
     var body: some View {
         @Bindable var s = settings
-        Form {
-            Section {
-                NavigationLink { GitHubAccountView() } label: {
-                    LabeledContent("Account GitHub", value: accountLabel)
+        GlassScreen(spacing: 16) {
+            HStack(spacing: 15) {
+                Image("AppMark")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 70, height: 70)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.20), lineWidth: 0.8)
+                    }
+                    .shadow(color: .black.opacity(0.22), radius: 11, x: 0, y: 5)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("ACTIONS RUNNER")
+                        .font(.system(.caption, design: .rounded, weight: .heavy))
+                        .tracking(1.8)
+                        .foregroundStyle(.secondary)
+                    Text("Control center")
+                        .font(.system(.title2, design: .rounded, weight: .bold))
+                    Text("Account GitHub, secrets e variabili")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-            } header: { Text("GitHub") } footer: {
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .liquidGlassCard(cornerRadius: 28, borderOpacity: 0.18)
+
+            VStack(alignment: .leading, spacing: 16) {
+                GlassSectionHeading(
+                    title: "Account GitHub",
+                    subtitle: connected ? "Token collegato" : "Collega il tuo account per eseguire i workflow",
+                    symbol: connected ? "person.crop.circle.badge.checkmark" : "person.crop.circle"
+                )
+                if connected {
+                    GlassStatusPill(title: "Collegato", symbol: "checkmark.seal.fill")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                NavigationLink { GitHubAccountView() } label: {
+                    Label(connected ? "Gestisci il token" : "Collega con un token", systemImage: "key.fill")
+                }
+                .buttonStyle(LiquidGlassButtonStyle(prominent: !connected))
                 Text("I workflow vengono eseguiti sui runner di GitHub (Ubuntu, Windows, macOS con Xcode); log, annotazioni e artifact arrivano nell'app.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .glassSection()
 
-            KeyValueEditor(title: "Secrets (secrets.*)", values: $s.localSecrets, secure: true)
-            KeyValueEditor(title: "Variabili (vars.*)", values: $s.localVariables)
-            Section {
-                Text("Si copiano nel repository quando attivi \"Copia secrets e variabili\" prima di avviare una run. I secrets vengono cifrati sul dispositivo.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+            KeyValueEditor(title: "Secrets", subtitle: "secrets.* — cifrati sul dispositivo prima dell'invio.",
+                           symbol: "lock.fill", values: $s.localSecrets, secure: true)
+            KeyValueEditor(title: "Variabili", subtitle: "vars.* — copiate in chiaro nel repository.",
+                           symbol: "textformat.abc", values: $s.localVariables)
 
-            Section("Spazio") {
-                Button("Elimina gli artifact scaricati e i file temporanei") { clearCaches() }
-                if let m = cacheMessage { Text(m).font(.caption).foregroundStyle(.secondary) }
+            VStack(alignment: .leading, spacing: 16) {
+                GlassSectionHeading(title: "Manutenzione", subtitle: "Libera spazio sul dispositivo.", symbol: "wrench.and.screwdriver")
+                Button { clearCaches() } label: {
+                    Label("Elimina artifact scaricati e file temporanei", systemImage: "trash")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(LiquidGlassButtonStyle())
+                if let m = cacheMessage {
+                    GlassStatusPill(title: m, symbol: "checkmark.circle.fill")
+                }
+                GlassDivider()
+                GlassDetailRow(title: "Versione", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0", symbol: "info.circle")
+                GlassDetailRow(title: "Dipendenze esterne", value: "nessuna", symbol: "shippingbox")
             }
-
-            Section("Info") {
-                LabeledContent("Versione", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0")
-                LabeledContent("Dipendenze esterne", value: "nessuna")
-            }
+            .glassSection()
         }
         .navigationTitle("Impostazioni")
-        .onAppear { accountLabel = GitHubAPI.stored == nil ? "non collegato" : "collegato" }
+        .navigationBarTitleDisplayMode(.large)
+        .onAppear { connected = GitHubAPI.stored != nil }
     }
 
     private func clearCaches() {

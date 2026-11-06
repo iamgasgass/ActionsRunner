@@ -22,15 +22,26 @@ struct ActionsRunnerApp: App {
 }
 
 struct RootView: View {
+    @State private var selection = 0
+
     var body: some View {
-        TabView {
-            NavigationStack { ProjectsView() }
-                .tabItem { Label("Progetti", systemImage: "shippingbox") }
-            NavigationStack { RunsView() }
-                .tabItem { Label("Esecuzioni", systemImage: "play.circle") }
-            NavigationStack { SettingsView() }
-                .tabItem { Label("Impostazioni", systemImage: "gearshape") }
+        ZStack {
+            AppGlassBackground()
+
+            TabView(selection: $selection) {
+                NavigationStack { ProjectsView() }
+                    .tabItem { Label("Progetti", systemImage: "shippingbox.fill") }
+                    .tag(0)
+                NavigationStack { RunsView() }
+                    .tabItem { Label("Esecuzioni", systemImage: "play.circle.fill") }
+                    .tag(1)
+                NavigationStack { SettingsView() }
+                    .tabItem { Label("Impostazioni", systemImage: "slider.horizontal.3") }
+                    .tag(2)
+            }
+            .tint(.white)
         }
+        .preferredColorScheme(.dark)
     }
 }
 

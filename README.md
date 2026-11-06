@@ -4,6 +4,9 @@ App iOS (SwiftUI, iOS 17+) che importa un **file .zip contenente una repository*
 (`.github/workflows/*.yml`) **sui runner reali di GitHub** (Ubuntu, Windows, **macOS con Xcode**),
 mostrando nell'app job, step, log, annotazioni e artifact (es. l'IPA). Nessuna libreria di terze parti.
 
+Interfaccia interamente **Liquid Glass** (`Views/GlassUI.swift`): vetro nativo `glassEffect` su iOS 26,
+materiale come ripiego su iOS 17–25, sfondo graphite, schede, pulsanti e campi in vetro, tema scuro.
+
 ## Uso
 
 1. **Impostazioni → Account GitHub**: incolla un token di accesso personale.
