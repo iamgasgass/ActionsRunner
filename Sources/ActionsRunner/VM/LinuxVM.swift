@@ -66,6 +66,21 @@ final class LinuxVM {
     var hasNetwork = false
     var kernel = ""
     var bootSeconds: Double = 0
+    /// Fase di avvio corrente, mostrata all'utente.
+    var bootStage = ""
+
+    /// Riga di comando del kernel: la stessa collaudata in CI (risorsa vm-cmdline.txt).
+    static var kernelCmdline: String {
+        if let u = Bundle.main.url(forResource: "vm-cmdline", withExtension: "txt"),
+           let t = try? String(contentsOf: u, encoding: .utf8),
+           let first = t.split(separator: "\n").first, !first.trimmingCharacters(in: .whitespaces).isEmpty {
+            return first.trimmingCharacters(in: .whitespaces)
+        }
+        return "console=hvc0 root=/dev/vda rw init=/sbin/ar-init loglevel=6"
+    }
+
+    /// Secondi senza alcun output dalla console dopo i quali l'avvio è considerato bloccato.
+    static let bootStallTimeout: TimeInterval = 240
 
     @ObservationIgnored private var inFD: Int32 = -1
     @ObservationIgnored private var outFD: Int32 = -1
@@ -74,6 +89,9 @@ final class LinuxVM {
     @ObservationIgnored private var pendingEmpty = 0
     @ObservationIgnored private let gate = AsyncMutex()
     @ObservationIgnored private var internalState: State = .stopped
+    @ObservationIgnored private var lastOutput = Date()
+    @ObservationIgnored private var rawBootLog: [String] = []
+    @ObservationIgnored private var bootObservers: [UUID: (String) -> Void] = [:]
 
     struct VMError: LocalizedError {
         let message: String
@@ -157,11 +175,43 @@ final class LinuxVM {
     }
 
     private func appendBootLog(_ line: String) {
+        ioLock.lock()
+        rawBootLog.append(line)
+        if rawBootLog.count > 3000 { rawBootLog.removeFirst(rawBootLog.count - 3000) }
+        let observers = Array(bootObservers.values)
+        ioLock.unlock()
+        for o in observers { o(line) }
         onMain {
             self.bootLog.append(line)
             if self.bootLog.count > 3000 { self.bootLog.removeFirst(self.bootLog.count - 3000) }
         }
     }
+
+    /// Registra un osservatore delle righe della console di avvio; riceve subito le righe già emesse.
+    func observeBoot(_ f: @escaping (String) -> Void) -> UUID {
+        let id = UUID()
+        ioLock.lock()
+        let past = rawBootLog
+        bootObservers[id] = f
+        ioLock.unlock()
+        for l in past { f(l) }
+        return id
+    }
+
+    func removeBootObserver(_ id: UUID) {
+        ioLock.lock()
+        bootObservers[id] = nil
+        ioLock.unlock()
+    }
+
+    /// Ultime righe della console, per i messaggi d'errore.
+    func lastBootLines(_ n: Int) -> [String] {
+        ioLock.lock()
+        defer { ioLock.unlock() }
+        return Array(rawBootLog.suffix(n))
+    }
+
+    private func setStage(_ s: String) { onMain { self.bootStage = s } }
 
     /// Avvia la VM (se non è già avviata) e attende che l'agente sia pronto.
     func boot(memoryMB: Int = 512, timeout: TimeInterval = 600) async throws {
@@ -194,7 +244,7 @@ final class LinuxVM {
             memory_size: \(memoryMB),
             bios: "\(res.bios.path)",
             kernel: "\(res.kernel.path)",
-            cmdline: "console=hvc0 root=/dev/vda rw rootfstype=ext2 init=/sbin/ar-init quiet loglevel=3",
+            cmdline: "\(LinuxVM.kernelCmdline)",
             drive0: { file: "\(res.rootfs.path)" },
             fs0: { tag: "hostfs", file: "\(shared)" },
             eth0: { driver: "user" },
@@ -203,6 +253,12 @@ final class LinuxVM {
         try config.write(to: cfg, atomically: true, encoding: .utf8)
         appendBootLog("Configurazione: \(cfg.path)")
         appendBootLog("RAM: \(memoryMB) MB · cartella condivisa: \(shared) → /mnt/host")
+
+        appendBootLog("Kernel: \(LinuxVM.kernelCmdline)")
+        setStage("avvio dell'emulatore")
+        ioLock.lock()
+        lastOutput = Date()
+        ioLock.unlock()
 
         var inW: Int32 = -1, outR: Int32 = -1
         let rc = cfg.path.withCString { ar_vm_start($0, &inW, &outR) }
@@ -228,13 +284,30 @@ final class LinuxVM {
             ioLock.unlock()
             switch s {
             case .ready: return
-            case .failed(let m): throw VMError(message: m)
+            case .failed(let m): throw VMError(message: m + LinuxVM.tailDescription(lastBootLines(8)))
             case .unavailable(let r): throw VMError(message: r)
             default: break
             }
-            if Date() > limit { throw VMError(message: "La VM non ha completato l'avvio entro \(Int(timeout)) secondi") }
+            ioLock.lock()
+            let silent = Date().timeIntervalSince(lastOutput)
+            ioLock.unlock()
+            if silent > LinuxVM.bootStallTimeout {
+                let reason = "nessun output dalla console della VM da \(Int(silent)) secondi (avvio bloccato)"
+                setState(.failed(reason))
+                throw VMError(message: reason + LinuxVM.tailDescription(lastBootLines(8)))
+            }
+            if Date() > limit {
+                let reason = "la VM non ha completato l'avvio entro \(Int(timeout)) secondi"
+                setState(.failed(reason))
+                throw VMError(message: reason + LinuxVM.tailDescription(lastBootLines(8)))
+            }
             try await Task.sleep(nanoseconds: 250_000_000)
         }
+    }
+
+    static func tailDescription(_ lines: [String]) -> String {
+        let l = lines.filter { !$0.isEmpty }
+        return l.isEmpty ? "" : ". Ultime righe della console:\n" + l.joined(separator: "\n")
     }
 
     // MARK: Lettura della console
@@ -247,6 +320,7 @@ final class LinuxVM {
             while true {
                 let n = read(fd, &buf, buf.count)
                 if n <= 0 { break }
+                self?.touchOutput()
                 pending.append(contentsOf: buf[0..<n])
                 while let nl = pending.firstIndex(of: 0x0A) {
                     var lineData = pending[pending.startIndex..<nl]
@@ -262,6 +336,12 @@ final class LinuxVM {
         thread.start()
     }
 
+    private func touchOutput() {
+        ioLock.lock()
+        lastOutput = Date()
+        ioLock.unlock()
+    }
+
     private func handleExit(_ reason: String) {
         setState(.failed(reason))
         ioLock.lock()
@@ -275,7 +355,11 @@ final class LinuxVM {
         // rimuove sequenze di escape ANSI del kernel/console
         let line = raw.replacingOccurrences(of: "\u{1B}\\[[0-9;?]*[A-Za-z]", with: "", options: .regularExpression)
 
-        if line.hasPrefix("__AR_VM_EXIT__") { handleExit("l'emulatore è terminato (\(line))"); return }
+        if line.hasPrefix("__AR_VM_EXIT__") {
+            appendBootLog(line)
+            handleExit("l'emulatore è terminato (\(line))")
+            return
+        }
 
         ioLock.lock()
         let booting = internalState == .booting
@@ -289,8 +373,11 @@ final class LinuxVM {
                 let k = flags.first { $0.hasPrefix("kernel=") }.map { String($0.dropFirst(7)) } ?? ""
                 onMain { self.has9p = ninep; self.hasNetwork = net; self.kernel = k }
             }
+            if line.hasPrefix("__AR_STAGE__ ") { setStage(String(line.dropFirst(13))) }
+            else if line.hasPrefix("__AR_BOOT__") { setStage("avvio dell'agente") }
+            else if line.contains("Linux version") { setStage("kernel Linux") }
             appendBootLog(line)
-            if line.hasPrefix("__AR_READY__") { setState(.ready) }
+            if line.hasPrefix("__AR_READY__") { setStage("pronta"); setState(.ready) }
             return
         }
 

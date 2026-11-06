@@ -1265,12 +1265,25 @@ final class LocalWorkflowRunner {
             }
             return .builtin
         }
+        var observer: UUID?
         if !vm.isReady {
-            emit(sm, "Avvio della VM Linux integrata (RISC-V 64, Alpine)… il primo avvio può richiedere qualche minuto.", .info)
+            emit(sm, "Avvio della VM Linux integrata (RISC-V 64, Alpine)", .groupStart)
+            // console di avvio in tempo reale nel log dello step: si vede esattamente dove si ferma
+            observer = vm.observeBoot { [weak self] line in
+                guard let self, !line.isEmpty, !line.hasPrefix("__AR_READY__") else { return }
+                self.emit(sm, line, .info)
+            }
         }
+        defer { if let observer { vm.removeBootObserver(observer) } }
+        let bootStart = Date()
         do {
             try await vm.boot(memoryMB: options.vmMemoryMB)
+            if observer != nil {
+                emit(sm, "", .groupEnd)
+                emit(sm, "VM Linux pronta in \(Format.duration(Date().timeIntervalSince(bootStart)))", .info)
+            }
         } catch {
+            if observer != nil { emit(sm, "", .groupEnd) }
             emit(sm, (strict ? "##[error]" : "Warning: ") + "VM Linux non avviata: \(error.localizedDescription)" + (strict ? "" : " — uso l'interprete integrato."), strict ? .error : .warning)
             return strict ? .fail : .builtin
         }

@@ -42,6 +42,10 @@ int ar_vm_start(const char *config_path, int *stdin_write, int *stdout_read) {
     /* L'emulatore usa stdin/stdout come console seriale: li ridirigiamo sulle pipe. */
     if (dup2(in_pipe[0], STDIN_FILENO) < 0) return -3;
     if (dup2(out_pipe[1], STDOUT_FILENO) < 0) return -3;
+    /* Anche stderr: i messaggi d'errore dell'emulatore (perror, fprintf(stderr)) compaiono
+       così nella console di avvio invece di andare persi. */
+    dup2(out_pipe[1], STDERR_FILENO);
+    setvbuf(stderr, NULL, _IONBF, 0);
     close(in_pipe[0]);
     close(out_pipe[1]);
     setvbuf(stdout, NULL, _IONBF, 0);

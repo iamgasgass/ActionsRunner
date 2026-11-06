@@ -69,6 +69,7 @@ struct VMStatusView: View {
             Section {
                 LabeledContent("Stato", value: vm.state.label)
                 if !vm.kernel.isEmpty { LabeledContent("Kernel", value: "Linux \(vm.kernel) (riscv64)") }
+                if vm.state == .booting && !vm.bootStage.isEmpty { LabeledContent("Fase", value: vm.bootStage) }
                 if vm.isReady {
                     LabeledContent("Cartella condivisa (9p)", value: vm.has9p ? "attiva" : "non disponibile")
                     LabeledContent("Rete (slirp)", value: vm.hasNetwork ? "attiva" : "non disponibile")

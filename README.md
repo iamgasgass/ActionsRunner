@@ -59,7 +59,11 @@ ancora in cache, come fa il runner di GitHub. Dopo il primo download funzionano 
 1. Carica questa repository su GitHub.
 2. Il workflow `.github/workflows/build.yml` ha due job:
    - **linux-image** (Ubuntu): scarica kernel e firmware di TinyEMU e crea il rootfs Alpine riscv64
-     (`scripts/build-linux-image.sh`; pacchetti personalizzabili con l'input `alpine_packages`);
+     (`scripts/build-linux-image.sh`; pacchetti personalizzabili con l'input `alpine_packages`),
+     poi **collauda l'avvio** (`scripts/test-vm-boot.sh`): compila TinyEMU per Linux dallo stesso
+     sorgente, avvia la VM con la stessa configurazione dell'app (kernel, cmdline `vm-cmdline.txt`,
+     9p, rete) ed esegue comandi con il protocollo dell'agente. Se la VM non arriva a `__AR_READY__`
+     o shell/bash/git/python3/9p non funzionano, l'immagine non viene pubblicata;
    - **build** (macOS 26): compila TinyEMU per iOS (`scripts/build-tinyemu.sh`: fork
      `fernandotcl/TinyEMU` con supporto iOS nativo, ripiego automatico sul sorgente originale),
      include l'immagine Linux, archivia l'app e produce l'**IPA non firmato**
@@ -70,6 +74,10 @@ ancora in cache, come fa il runner di GitHub. Dopo il primo download funzionano 
 4. Installa l'IPA con AltStore, SideStore, Sideloadly o TrollStore.
 5. Opzionale: IPA firmato con i secrets `BUILD_CERTIFICATE_BASE64`, `P12_PASSWORD`,
    `BUILD_PROVISION_PROFILE_BASE64`; un tag `v*` pubblica una Release.
+
+Nell'app, durante l'avvio della VM la console del kernel compare in tempo reale nel log dello step
+(gruppo «Avvio della VM Linux integrata») e in Impostazioni → VM Linux; se la console resta muta per
+4 minuti l'avvio viene interrotto con le ultime righe ricevute.
 
 Gli unit test (`Tests/ActionsRunnerTests`) non fanno parte della CI; si eseguono da Xcode (⌘U).
 
@@ -101,7 +109,9 @@ scripts/
   linux-rootfs.sh               creazione del rootfs (eseguito in un container Alpine)
   build-tinyemu.sh              TinyEMU → libtemu.a per iOS (+ verifica di collegamento)
   tinyemu-ios/                  adattamenti per il sorgente originale di TinyEMU
+  test-vm-boot.sh, vm-boot-test.py  collaudo dell'avvio della VM sul runner Linux
   vm/ar-init, vm/ar-agent       init e agente della VM (protocollo sulla console)
+  vm/cmdline.txt                riga di comando del kernel (unica per app e collaudo)
   vm/compat/                    sudo, apt-get/apt, brew per i workflow scritti per Ubuntu
 Sources/ActionsRunner/
   Core/        JSONValue ordinato, parser YAML
