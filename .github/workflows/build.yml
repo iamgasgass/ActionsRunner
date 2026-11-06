@@ -1,0 +1,239 @@
+name: Build iOS App
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: "Configurazione di build"
+        type: choice
+        options: [Release, Debug]
+        default: Release
+      run_tests:
+        description: "Esegui gli unit test"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT: ActionsRunner.xcodeproj
+  SCHEME: ActionsRunner
+  APP_NAME: ActionsRunner
+
+jobs:
+  test:
+    name: Unit test (simulatore)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests }}
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Versione Xcode
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Installa XcodeGen
+        run: brew install xcodegen
+
+      - name: Genera il progetto Xcode
+        run: xcodegen generate --spec project.yml
+
+      - name: Risolvi i pacchetti Swift
+        run: xcodebuild -resolvePackageDependencies -project "$PROJECT" -scheme "$SCHEME"
+
+      - name: Scegli un simulatore iPhone
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          data = json.load(sys.stdin)["devices"]
+          best = None
+          for runtime, devices in data.items():
+              if "iOS" not in runtime:
+                  continue
+              for d in devices:
+                  if d.get("isAvailable") and d["name"].startswith("iPhone"):
+                      key = (runtime, d["name"])
+                      if best is None or key > best[0]:
+                          best = (key, d["udid"])
+          print(best[1] if best else "")
+          ')
+          if [ -z "$UDID" ]; then
+            echo "::error::Nessun simulatore iPhone disponibile"
+            exit 1
+          fi
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          echo "Simulatore scelto: $UDID"
+
+      - name: Esegui i test
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            -resultBundlePath build/TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO | tee build-test.log
+
+      - name: Carica i risultati dei test
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-results
+          path: |
+            build/TestResults.xcresult
+            build-test.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  build:
+    name: Build IPA
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      CONFIGURATION: ${{ inputs.configuration || 'Release' }}
+      HAS_SIGNING: ${{ secrets.BUILD_CERTIFICATE_BASE64 != '' && secrets.BUILD_PROVISION_PROFILE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Versione Xcode
+        run: xcodebuild -version
+
+      - name: Installa XcodeGen
+        run: brew install xcodegen
+
+      - name: Genera il progetto Xcode
+        run: xcodegen generate --spec project.yml
+
+      - name: Risolvi i pacchetti Swift
+        run: xcodebuild -resolvePackageDependencies -project "$PROJECT" -scheme "$SCHEME"
+
+      - name: Archivia (senza firma)
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -archivePath "build/$APP_NAME.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" | tee build-archive.log
+
+      - name: Crea IPA non firmato
+        run: |
+          APP_PATH="build/$APP_NAME.xcarchive/Products/Applications/$APP_NAME.app"
+          test -d "$APP_PATH" || { echo "::error::App non trovata in $APP_PATH"; exit 1; }
+          rm -rf build/Payload && mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/
+          (cd build && zip -qry "$APP_NAME-unsigned.ipa" Payload)
+          ls -lh "build/$APP_NAME-unsigned.ipa"
+          echo "### IPA non firmato pronto" >> "$GITHUB_STEP_SUMMARY"
+          echo "Installalo con AltStore, SideStore, Sideloadly o TrollStore." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Carica IPA non firmato
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.APP_NAME }}-unsigned-ipa
+          path: build/${{ env.APP_NAME }}-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      # ---- Firma opzionale: attiva solo se i secrets sono configurati ----
+      - name: Importa certificato e profilo
+        if: env.HAS_SIGNING == 'true'
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD || github.run_id }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/build_certificate.p12"
+          PP_PATH="$RUNNER_TEMP/build_pp.mobileprovision"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERT_PATH"
+          echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o "$PP_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$PP_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/
+          PROFILE_UUID=$(security cms -D -i "$PP_PATH" | plutil -extract UUID raw -)
+          TEAM_ID=$(security cms -D -i "$PP_PATH" | plutil -extract TeamIdentifier.0 raw -)
+          echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
+          echo "TEAM_ID=$TEAM_ID" >> "$GITHUB_ENV"
+
+      - name: Archivia ed esporta IPA firmato
+        if: env.HAS_SIGNING == 'true'
+        env:
+          EXPORT_METHOD: ${{ vars.EXPORT_METHOD || 'ad-hoc' }}
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -archivePath "build/$APP_NAME-signed.xcarchive" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            PROVISIONING_PROFILE="$PROFILE_UUID" \
+            CODE_SIGN_IDENTITY="Apple Distribution" | tee build-signed.log
+          cat > build/ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>$EXPORT_METHOD</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict><key>com.actionsrunner.app</key><string>$PROFILE_UUID</string></dict>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath "build/$APP_NAME-signed.xcarchive" \
+            -exportOptionsPlist build/ExportOptions.plist \
+            -exportPath build/signed
+
+      - name: Carica IPA firmato
+        if: env.HAS_SIGNING == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.APP_NAME }}-signed-ipa
+          path: build/signed/*.ipa
+          if-no-files-found: error
+
+      - name: Pulisci il keychain
+        if: always() && env.HAS_SIGNING == 'true'
+        run: security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" || true
+
+      - name: Pubblica release (solo tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FILES="build/$APP_NAME-unsigned.ipa"
+          if ls build/signed/*.ipa >/dev/null 2>&1; then FILES="$FILES $(ls build/signed/*.ipa)"; fi
+          gh release create "$GITHUB_REF_NAME" $FILES \
+            --title "$APP_NAME $GITHUB_REF_NAME" \
+            --generate-notes
