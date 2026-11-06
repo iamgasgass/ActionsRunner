@@ -81,9 +81,23 @@ build_variant() {
   rm -f "$lib"
   [ ${#objs[@]} -gt 0 ] || { echo "  nessun oggetto compilato"; return 1; }
   "$AR" rcs "$lib" "${objs[@]}"
-  if ! "$NM" -g "$lib" 2>/dev/null | grep -q " T _temu_main"; then
-    echo "  temu_main non esportato"; return 1
+  # (niente "nm | grep -q": con pipefail il SIGPIPE di nm darebbe un falso negativo)
+  "$NM" -g "$objdir/temu.o" > "$objdir/temu.syms" 2>/dev/null || true
+  if ! grep -q " T _temu_main$" "$objdir/temu.syms"; then
+    if grep -q " T _main$" "$objdir/temu.syms"; then
+      echo "  temu.c esporta main: ricompilo con -Dmain=temu_main"
+      "$CC" "${flags[@]}" -Dmain=temu_main -c "$src/temu.c" -o "$objdir/temu.o" || return 1
+      rm -f "$lib"
+      "$AR" rcs "$lib" "${objs[@]}"
+      "$NM" -g "$objdir/temu.o" > "$objdir/temu.syms" 2>/dev/null || true
+    fi
   fi
+  if ! grep -q " T _temu_main$" "$objdir/temu.syms"; then
+    echo "  temu_main non trovato. Simboli globali di temu.o:"
+    grep " T " "$objdir/temu.syms" | head -20
+    return 1
+  fi
+  echo "  temu_main esportato"
   if ! link_check "$lib" "$objdir"; then
     echo "  Simboli non risolti:"; grep -E "Undefined|_[a-zA-Z0-9_]+, referenced|\"_" "$objdir/link.log" | head -40 || cat "$objdir/link.log"
     return 1
