@@ -76,11 +76,6 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_STYLE: Automatic
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
-        SWIFT_OBJC_BRIDGING_HEADER: Sources/ActionsRunner/VM/ActionsRunner-Bridging-Header.h
-        # temu_main è fornito da Vendor/LinuxVM/libtemu.a (collegato dalla CI con -force_load);
-        # se la libreria manca il simbolo resta debole e la VM risulta non disponibile.
-        OTHER_LDFLAGS: "$(inherited) -Wl,-U,_temu_main"
-        GCC_C_LANGUAGE_STANDARD: gnu11
 
   ActionsRunnerTests:
     type: bundle.unit-test

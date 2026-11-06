@@ -10,9 +10,6 @@ enum AppPaths {
     static var caches: URL { ensure(fm.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("ActionsRunner", isDirectory: true)) }
 
     static var projects: URL { ensure(support.appendingPathComponent("Projects", isDirectory: true)) }
-    static var localRuns: URL { ensure(caches.appendingPathComponent("Runs", isDirectory: true)) }
-    static var actionsCache: URL { ensure(caches.appendingPathComponent("Actions", isDirectory: true)) }
-    static var cacheStore: URL { ensure(caches.appendingPathComponent("ActionsCache", isDirectory: true)) }
     static var cloudArtifacts: URL { ensure(caches.appendingPathComponent("GitHubArtifacts", isDirectory: true)) }
     static var exports: URL { ensure(documents.appendingPathComponent("Export", isDirectory: true)) }
     static var temp: URL { ensure(fm.temporaryDirectory.appendingPathComponent("ActionsRunner", isDirectory: true)) }
@@ -21,6 +18,11 @@ enum AppPaths {
     static func ensure(_ u: URL) -> URL {
         if !fm.fileExists(atPath: u.path) { try? fm.createDirectory(at: u, withIntermediateDirectories: true) }
         return u
+    }
+
+    static func isDirectory(_ u: URL) -> Bool {
+        var d: ObjCBool = false
+        return fm.fileExists(atPath: u.path, isDirectory: &d) && d.boolValue
     }
 
     static func size(of url: URL) -> Int64 {
@@ -61,15 +63,9 @@ enum Keychain {
 
 // MARK: - Impostazioni
 
+/// Secrets e variabili che l'app può copiare nel repository GitHub prima dell'esecuzione.
 @Observable
 final class AppSettings {
-    var shellEngine: ShellEngine { didSet { save() } }
-    var vmMemoryMB: Int { didSet { save() } }
-    var bootVMOnLaunch: Bool { didSet { save() } }
-    var debugLogs: Bool { didSet { save() } }
-    var unsupportedPolicy: LocalRunOptions.UnsupportedPolicy { didSet { save() } }
-    var repositoryOwner: String { didSet { save() } }
-    var actor: String { didSet { save() } }
     var localSecrets: [String: String] { didSet { saveSecrets() } }
     var localVariables: [String: String] { didSet { save() } }
 
@@ -77,13 +73,6 @@ final class AppSettings {
 
     init() {
         let d = UserDefaults.standard.dictionary(forKey: AppSettings.defaultsKey) ?? [:]
-        shellEngine = ShellEngine(rawValue: d["shellEngine"] as? String ?? "") ?? .auto
-        vmMemoryMB = d["vmMemoryMB"] as? Int ?? 512
-        bootVMOnLaunch = d["bootVMOnLaunch"] as? Bool ?? false
-        debugLogs = d["debugLogs"] as? Bool ?? false
-        unsupportedPolicy = LocalRunOptions.UnsupportedPolicy(rawValue: d["unsupportedPolicy"] as? String ?? "") ?? .fail
-        repositoryOwner = d["repositoryOwner"] as? String ?? "local"
-        actor = d["actor"] as? String ?? "ios-user"
         localVariables = d["localVariables"] as? [String: String] ?? [:]
         if let s = Keychain.get("local-secrets"), let data = s.data(using: .utf8),
            let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
@@ -94,12 +83,7 @@ final class AppSettings {
     }
 
     private func save() {
-        let d: [String: Any] = [
-            "shellEngine": shellEngine.rawValue, "vmMemoryMB": vmMemoryMB, "bootVMOnLaunch": bootVMOnLaunch,
-            "debugLogs": debugLogs, "unsupportedPolicy": unsupportedPolicy.rawValue,
-            "repositoryOwner": repositoryOwner, "actor": actor, "localVariables": localVariables
-        ]
-        UserDefaults.standard.set(d, forKey: AppSettings.defaultsKey)
+        UserDefaults.standard.set(["localVariables": localVariables], forKey: AppSettings.defaultsKey)
     }
 
     private func saveSecrets() {
@@ -118,7 +102,6 @@ struct Project: Codable, Identifiable, Hashable {
     var sourceFileName: String
     var fileCount: Int
     var sizeBytes: Int64
-    var localRunCounter: Int = 0
     /// Repository GitHub collegato (owner/nome) e branch usati per "Esegui su GitHub".
     var githubRepo: String?
     var githubBranch: String?
@@ -201,7 +184,7 @@ final class ProjectStore {
                 try? fm.removeItem(at: extracted.appendingPathComponent("__MACOSX"))
                 let entries = try fm.contentsOfDirectory(atPath: extracted.path).filter { $0 != ".DS_Store" }
                 // GitHub "Download ZIP" produce una cartella radice "repo-main/": la rimuoviamo
-                if entries.count == 1, FileCommands.isDir(extracted.appendingPathComponent(entries[0])) {
+                if entries.count == 1, AppPaths.isDirectory(extracted.appendingPathComponent(entries[0])) {
                     baseName = entries[0]
                     try fm.moveItem(at: extracted.appendingPathComponent(entries[0]), to: repo)
                     try? fm.removeItem(at: extracted)
@@ -237,7 +220,7 @@ final class ProjectStore {
 
 extension Project {
     enum CodingKeys: String, CodingKey {
-        case id, name, importedAt, sourceFileName, fileCount, sizeBytes, localRunCounter, githubRepo, githubBranch
+        case id, name, importedAt, sourceFileName, fileCount, sizeBytes, githubRepo, githubBranch
     }
 
     /// Decodifica tollerante: i campi aggiunti nelle versioni successive sono facoltativi.
@@ -249,7 +232,6 @@ extension Project {
         sourceFileName = try c.decodeIfPresent(String.self, forKey: .sourceFileName) ?? ""
         fileCount = try c.decodeIfPresent(Int.self, forKey: .fileCount) ?? 0
         sizeBytes = try c.decodeIfPresent(Int64.self, forKey: .sizeBytes) ?? 0
-        localRunCounter = try c.decodeIfPresent(Int.self, forKey: .localRunCounter) ?? 0
         githubRepo = try c.decodeIfPresent(String.self, forKey: .githubRepo)
         githubBranch = try c.decodeIfPresent(String.self, forKey: .githubBranch)
     }

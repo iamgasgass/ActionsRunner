@@ -3,44 +3,21 @@ import SwiftUI
 struct WorkflowDetailView: View {
     let project: Project
     let workflow: Workflow
-    @Environment(RunCenter.self) private var runs
-    @Environment(AppSettings.self) private var settings
     @Environment(ProjectStore.self) private var store
-    @State private var showLocal = false
-    @State private var startedLocal: LocalRunModel?
     @State private var showCloud = false
     @State private var startedCloud: CloudRunModel?
-
-    private var hasMacJobs: Bool {
-        workflow.jobs.contains { j in
-            (j.runsOn?.scalarString ?? j.runsOn?.toJSON(pretty: false) ?? "").lowercased().contains("macos")
-        }
-    }
 
     var body: some View {
         List {
             Section {
-                Button { showLocal = true } label: {
-                    Label {
-                        VStack(alignment: .leading) {
-                            Text("Esegui il workflow").font(.headline)
-                            Text(LinuxVM.shared.isSupported
-                                 ? "Tutto sul dispositivo: motore Actions + VM Linux (Alpine) per gli step run: e le azioni JavaScript."
-                                 : "Tutto sul dispositivo con l'interprete integrato (VM Linux non inclusa in questa build).")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    } icon: { Image(systemName: "iphone") }
-                }
                 Button { showCloud = true } label: {
                     Label {
                         VStack(alignment: .leading) {
                             Text("Esegui su GitHub").font(.headline)
-                            Text(hasMacJobs
-                                 ? "Necessario per questo workflow: i job macOS (Xcode, SDK iOS, firma) girano sui Mac di GitHub. Log, annotazioni e artifact (es. IPA) arrivano nell'app."
-                                 : "Sui runner reali di GitHub (Ubuntu, Windows, macOS con Xcode): log, annotazioni e artifact nell'app.")
+                            Text("Sui runner di GitHub (Ubuntu, Windows, macOS con Xcode): job, log, annotazioni e artifact (es. IPA) nell'app.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                    } icon: { Image(systemName: "cloud") }
+                    } icon: { Image(systemName: "play.circle.fill") }
                 }
             }
 
@@ -99,14 +76,6 @@ struct WorkflowDetailView: View {
             }
         }
         .navigationTitle(workflow.name)
-        .sheet(isPresented: $showLocal) {
-            NavigationStack {
-                LocalRunConfigView(project: project, workflow: workflow) { model in
-                    showLocal = false
-                    startedLocal = model
-                }
-            }
-        }
         .sheet(isPresented: $showCloud) {
             NavigationStack {
                 CloudRunConfigView(project: store.project(project.id) ?? project, workflow: workflow) { model in
@@ -115,14 +84,8 @@ struct WorkflowDetailView: View {
                 }
             }
         }
-        .navigationDestination(item: $startedLocal) { m in LocalRunView(model: m) }
         .navigationDestination(item: $startedCloud) { m in CloudRunView(model: m) }
     }
-}
-
-extension LocalRunModel: Hashable {
-    static func == (a: LocalRunModel, b: LocalRunModel) -> Bool { a.id == b.id }
-    func hash(into h: inout Hasher) { h.combine(id) }
 }
 
 /// Form per gli input di workflow_dispatch.
@@ -168,95 +131,5 @@ struct DispatchInputsForm: View {
             else if i.type == "choice", let f = i.options.first { d[i.name] = f }
         }
         return d
-    }
-}
-
-struct LocalRunConfigView: View {
-    let project: Project
-    let workflow: Workflow
-    let onStart: (LocalRunModel) -> Void
-    @Environment(RunCenter.self) private var runs
-    @Environment(AppSettings.self) private var settings
-    @Environment(ProjectStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
-    @State private var event = "push"
-    @State private var ref = "refs/heads/main"
-    @State private var inputs: [String: String] = [:]
-    @State private var onlyJob = ""
-    @State private var debug = false
-    @State private var policy: LocalRunOptions.UnsupportedPolicy = .fail
-    @State private var engine: ShellEngine = .auto
-
-    var body: some View {
-        Form {
-            Section("Evento") {
-                Picker("Evento", selection: $event) {
-                    ForEach(workflow.eventNames + (workflow.eventNames.contains("push") ? [] : ["push"]), id: \.self) { Text($0).tag($0) }
-                }
-                TextField("Ref", text: $ref).textInputAutocapitalization(.never).autocorrectionDisabled()
-                let branch = ref.replacingOccurrences(of: "refs/heads/", with: "").replacingOccurrences(of: "refs/tags/", with: "")
-                if let cfg = workflow.triggers[event], ["push", "pull_request", "pull_request_target"].contains(event),
-                   !FilterPattern.triggerMatches(config: cfg, branch: branch, isTag: ref.hasPrefix("refs/tags/")) {
-                    Label("Su GitHub questo evento non attiverebbe il workflow (filtri branches/tags). Verrà eseguito comunque.", systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange)
-                }
-                if workflow.triggers[event] == nil {
-                    Label("Il workflow non dichiara '\(event)': GitHub non lo avvierebbe per questo evento. Verrà eseguito comunque.", systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange)
-                }
-            }
-            if event == "workflow_dispatch" && !workflow.dispatchInputs.isEmpty {
-                Section("Input") { DispatchInputsForm(inputs: workflow.dispatchInputs, values: $inputs) }
-            }
-            Section("Opzioni") {
-                Picker("Job", selection: $onlyJob) {
-                    Text("Tutti").tag("")
-                    ForEach(workflow.jobs, id: \.id) { Text($0.displayName).tag($0.id) }
-                }
-                Picker("Esecuzione degli step", selection: $engine) {
-                    ForEach(ShellEngine.allCases) { Text($0.label).tag($0) }
-                }
-                Picker("Azioni non supportate", selection: $policy) {
-                    ForEach(LocalRunOptions.UnsupportedPolicy.allCases) { Text($0.label).tag($0) }
-                }
-                Toggle("Debug (ACTIONS_STEP_DEBUG)", isOn: $debug)
-            }
-            Section {
-                Text("I secrets e le variabili si configurano in Impostazioni. Le azioni remote (uses: owner/repo@ref) vengono scaricate una volta e poi restano in cache: le esecuzioni successive funzionano anche offline.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .navigationTitle("Esecuzione locale")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("Annulla") { dismiss() } }
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Avvia") {
-                    var o = LocalRunOptions(sourceURL: project.repoURL)
-                    o.eventName = event
-                    o.ref = ref
-                    o.inputs = inputs
-                    o.secrets = settings.localSecrets
-                    o.variables = settings.localVariables
-                    o.repositoryOwner = settings.repositoryOwner.isEmpty ? "local" : settings.repositoryOwner
-                    o.repositoryName = Project.sanitizedRepoName(project.name)
-                    o.actor = settings.actor.isEmpty ? "ios-user" : settings.actor
-                    o.shellEngine = engine
-                    o.vmMemoryMB = settings.vmMemoryMB
-                    o.debug = debug || settings.debugLogs
-                    o.onlyJob = onlyJob.isEmpty ? nil : onlyJob
-                    o.unsupportedActions = policy
-                    let m = runs.startLocal(project: project, workflow: workflow, options: o, store: store)
-                    onStart(m)
-                }
-            }
-        }
-        .onAppear {
-            event = workflow.eventNames.first { ["push", "workflow_dispatch", "pull_request"].contains($0) } ?? workflow.eventNames.first ?? "push"
-            inputs = DispatchInputsForm.defaults(workflow.dispatchInputs)
-            policy = settings.unsupportedPolicy
-            engine = settings.shellEngine
-            debug = settings.debugLogs
-        }
     }
 }

@@ -165,35 +165,6 @@ struct LogLineRow: View {
     }
 }
 
-/// Log testuale di GitHub (timestamp ISO + ##[group]) convertito in righe.
-enum GitHubLogParser {
-    static func parse(_ text: String) -> [LogLine] {
-        var out: [LogLine] = []
-        var id = 0
-        for raw in text.components(separatedBy: "\n") {
-            var line = raw
-            if line.hasSuffix("\r") { line.removeLast() }
-            // rimuove il timestamp iniziale "2026-11-06T01:02:03.4567890Z "
-            if line.count > 29, line.dropFirst(4).first == "-", let space = line.firstIndex(of: " "),
-               line.distance(from: line.startIndex, to: space) <= 30, line[line.index(before: space)] == "Z" {
-                line = String(line[line.index(after: space)...])
-            }
-            if line.hasPrefix("\u{FEFF}") { line.removeFirst() }
-            var kind: LogLine.Kind = .output
-            if line.hasPrefix("##[group]") { kind = .groupStart; line = String(line.dropFirst(9)) }
-            else if line.hasPrefix("##[endgroup]") { kind = .groupEnd; line = "" }
-            else if line.hasPrefix("##[error]") { kind = .error; line = String(line.dropFirst(9)) }
-            else if line.hasPrefix("##[warning]") { kind = .warning; line = String(line.dropFirst(11)) }
-            else if line.hasPrefix("##[notice]") { kind = .notice; line = String(line.dropFirst(10)) }
-            else if line.hasPrefix("##[debug]") { kind = .debug }
-            else if line.hasPrefix("[command]") { kind = .command; line = String(line.dropFirst(9)) }
-            out.append(LogLine(id: id, text: line, kind: kind, date: Date()))
-            id += 1
-        }
-        return out
-    }
-}
-
 struct KeyValueEditor: View {
     let title: String
     @Binding var values: [String: String]

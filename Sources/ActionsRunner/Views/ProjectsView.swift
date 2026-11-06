@@ -171,7 +171,7 @@ struct FileBrowserView: View {
 
     var body: some View {
         List(items, id: \.self) { item in
-            if FileCommands.isDir(item) {
+            if AppPaths.isDirectory(item) {
                 NavigationLink {
                     FileBrowserView(root: root, url: item, title: item.lastPathComponent)
                 } label: { Label(item.lastPathComponent, systemImage: "folder.fill") }
@@ -194,7 +194,7 @@ struct FileBrowserView: View {
             let fm = FileManager.default
             let all = (try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? []
             items = all.sorted { a, b in
-                let da = FileCommands.isDir(a), db = FileCommands.isDir(b)
+                let da = AppPaths.isDirectory(a), db = AppPaths.isDirectory(b)
                 if da != db { return da }
                 return a.lastPathComponent.localizedStandardCompare(b.lastPathComponent) == .orderedAscending
             }

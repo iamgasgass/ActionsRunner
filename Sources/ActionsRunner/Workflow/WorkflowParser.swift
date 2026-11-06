@@ -150,12 +150,6 @@ enum WorkflowValidator {
             if job.raw["steps"]?.arrayValue?.isEmpty ?? true {
                 d.append(Diagnostic(severity: .error, message: "Il job non ha 'steps'", location: jl))
             }
-            if let label = job.runsOn?.scalarString, label.contains("windows") {
-                d.append(Diagnostic(severity: .warning, message: "Runner Windows: gli step verranno eseguiti nella VM Linux (pwsh/cmd non disponibili)", location: jl))
-            }
-            if job.container != nil || job.services != nil {
-                d.append(Diagnostic(severity: .info, message: "container/services richiedono Docker, che non può girare nell'app: verranno ignorati", location: jl))
-            }
             var stepIds = Set<String>()
             for step in job.steps {
                 let sl = "\(jl) › steps[\(step.index)]"
