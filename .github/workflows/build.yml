@@ -12,14 +12,6 @@ on:
         type: choice
         options: [Release, Debug]
         default: Release
-      allow_without_vm:
-        description: "Consenti un IPA senza VM Linux se la VM non si compila"
-        type: boolean
-        default: false
-      alpine_packages:
-        description: "Pacchetti Alpine nella VM (vuoto = predefiniti)"
-        type: string
-        default: ""
 
 permissions:
   contents: write
@@ -34,35 +26,10 @@ env:
   APP_NAME: ActionsRunner
 
 jobs:
-  linux-image:
-    name: Immagine Linux per la VM (Alpine riscv64)
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Kernel, firmware e rootfs
-        env:
-          ALPINE: v3.21
-          PKGS: ${{ inputs.alpine_packages }}
-        run: |
-          if [ -z "$PKGS" ]; then unset PKGS; fi
-          ./scripts/build-linux-image.sh
-
-      - name: Carica l'immagine
-        uses: actions/upload-artifact@v6
-        with:
-          name: linux-vm-image
-          path: out/
-          if-no-files-found: error
-          retention-days: 7
-
   build:
     name: Build IPA
-    needs: linux-image
-    if: ${{ always() }}
     runs-on: macos-26
-    timeout-minutes: 75
+    timeout-minutes: 45
     env:
       CONFIGURATION: ${{ inputs.configuration || 'Release' }}
       HAS_SIGNING: ${{ secrets.BUILD_CERTIFICATE_BASE64 != '' && secrets.BUILD_PROVISION_PROFILE_BASE64 != '' }}
@@ -78,44 +45,6 @@ jobs:
       - name: Genera il progetto Xcode
         run: xcodegen generate --spec project.yml
 
-      - name: Scarica l'immagine Linux
-        if: ${{ needs.linux-image.result == 'success' }}
-        uses: actions/download-artifact@v6
-        with:
-          name: linux-vm-image
-          path: Sources/ActionsRunner/Resources/LinuxVM
-
-      - name: Compila l'emulatore TinyEMU per iOS
-        id: temu
-        continue-on-error: ${{ inputs.allow_without_vm == true }}
-        run: ./scripts/build-tinyemu.sh
-
-      - name: Configura il collegamento della VM
-        run: |
-          LDF="-Wl,-U,_temu_main"
-          if [ -f Vendor/LinuxVM/libtemu.a ] && [ -f Sources/ActionsRunner/Resources/LinuxVM/rootfs.ext2 ]; then
-            LDF="-Wl,-force_load,$PWD/Vendor/LinuxVM/libtemu.a -lresolv -lz"
-            echo "VM_INCLUDED=true" >> "$GITHUB_ENV"
-            echo "### VM Linux inclusa" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            cat Vendor/LinuxVM/BUILD_INFO.txt >> "$GITHUB_STEP_SUMMARY" || true
-            ls -lh Sources/ActionsRunner/Resources/LinuxVM >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-          else
-            if [ "${{ inputs.allow_without_vm }}" != "true" ]; then
-              echo "::error::VM Linux mancante (libtemu.a o rootfs.ext2): build interrotta. Avvia il workflow con allow_without_vm=true per un IPA senza VM."
-              exit 1
-            fi
-            rm -rf Sources/ActionsRunner/Resources/LinuxVM
-            echo "VM_INCLUDED=false" >> "$GITHUB_ENV"
-            echo "::warning::VM Linux non inclusa: l'app userà solo l'interprete integrato"
-            echo "### VM Linux NON inclusa (vedi i log degli step precedenti)" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          echo "VM_LDFLAGS=$LDF" >> "$GITHUB_ENV"
-
-      - name: Rigenera il progetto con le risorse della VM
-        run: xcodegen generate --spec project.yml
-
       - name: Archivia (senza firma)
         run: |
           set -o pipefail
@@ -129,27 +58,17 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            CODE_SIGN_ENTITLEMENTS="" \
-            OTHER_LDFLAGS="$VM_LDFLAGS" | tee build-archive.log
+            CODE_SIGN_ENTITLEMENTS="" | tee build-archive.log
 
       - name: Crea IPA non firmato
         run: |
           APP_PATH="build/$APP_NAME.xcarchive/Products/Applications/$APP_NAME.app"
           test -d "$APP_PATH" || { echo "::error::App non trovata in $APP_PATH"; exit 1; }
-          if [ "$VM_INCLUDED" = "true" ]; then
-            # verifica che l'IPA contenga davvero emulatore e immagine Linux
-            for f in bbl64.bin kernel-riscv64.bin rootfs.ext2; do
-              test -f "$APP_PATH/$f" || { echo "::error::$f non incluso nell'app"; exit 1; }
-            done
-            grep -a -q "AR_TINYEMU_LINKED_v1" "$APP_PATH/$APP_NAME" || { echo "::error::TinyEMU non collegato nel binario"; exit 1; }
-            echo "Verifica VM: emulatore collegato e immagine Linux inclusa"
-            du -sh "$APP_PATH"
-          fi
           rm -rf build/Payload && mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
           (cd build && zip -qry "$APP_NAME-unsigned.ipa" Payload)
           ls -lh "build/$APP_NAME-unsigned.ipa"
-          echo "### IPA non firmato pronto (VM Linux inclusa: $VM_INCLUDED)" >> "$GITHUB_STEP_SUMMARY"
+          echo "### IPA non firmato pronto" >> "$GITHUB_STEP_SUMMARY"
           echo "Installalo con AltStore, SideStore, Sideloadly o TrollStore." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Carica IPA non firmato
@@ -203,8 +122,7 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$TEAM_ID" \
             PROVISIONING_PROFILE="$PROFILE_UUID" \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            OTHER_LDFLAGS="$VM_LDFLAGS" | tee build-signed.log
+            CODE_SIGN_IDENTITY="Apple Distribution" | tee build-signed.log
           cat > build/ExportOptions.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
