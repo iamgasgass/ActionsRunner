@@ -77,6 +77,15 @@ final class CloudJobModel: Identifiable {
     var logState: LogState = .none
     @ObservationIgnored var lastLogAttempt: Date?
     @ObservationIgnored var annotationsLoaded = false
+    /// Schermate del job aperte (il job osservato non subisce il limite di download per giro).
+    @ObservationIgnored var watchers = 0
+    /// Chiede al monitoraggio un aggiornamento immediato del log.
+    @ObservationIgnored var refreshRequested = false
+    /// Step terminati all'ultimo download del log: quando uno step termina il suo log diventa
+    /// disponibile su GitHub e viene scaricato subito, senza attendere l'intervallo.
+    @ObservationIgnored var stepsDoneAtLastLog = -1
+
+    var stepsDone: Int { job.steps?.filter { $0.status == "completed" }.count ?? 0 }
 
     init(job: GHJob) {
         id = job.id
@@ -193,10 +202,10 @@ final class CloudRunEngine {
         }
     }
 
-    /// Riprende il monitoraggio (dopo il riavvio dell'app o una nuova esecuzione).
+    /// Riprende il monitoraggio (dopo il riavvio dell'app, una nuova esecuzione o un errore
+    /// del monitoraggio: con l'ID della run noto, un errore precedente non è mai definitivo).
     func resume() {
         guard model.runId != nil, task == nil else { return }
-        if case .failed = model.phase { return }
         model.phase = .running
         task = Task { [weak self] in
             await self?.monitor()
@@ -314,19 +323,26 @@ final class CloudRunEngine {
         guard let runId = model.runId else { return }
         var lastArtifacts = Date.distantPast
         var failures = 0
+        var notFoundSince: Date?
         while !Task.isCancelled {
             do {
-                let run = try await actions.run(runId)
-                model.run = run
-                let jobs = try await actions.jobs(runId: runId)
-                merge(jobs)
+                // run e job in parallelo: un giro di aggiornamento costa metà del tempo
+                async let runReq = actions.run(runId)
+                async let jobsReq = actions.jobs(runId: runId)
+                let run = try await runReq
+                let jobs = (try? await jobsReq) ?? []
+                if model.run != run { model.run = run }
+                if !jobs.isEmpty || model.jobs.isEmpty { merge(jobs) }
                 try await refreshLogs(final: run.isCompleted)
                 if run.isCompleted || Date().timeIntervalSince(lastArtifacts) > 30 {
-                    model.artifacts = try await actions.artifacts(runId: runId)
-                    lastArtifacts = Date()
+                    if let a = try? await actions.artifacts(runId: runId) {
+                        if model.artifacts != a { model.artifacts = a }
+                        lastArtifacts = Date()
+                    }
                 }
-                model.transientError = nil
+                if model.transientError != nil { model.transientError = nil }
                 failures = 0
+                notFoundSince = nil
                 if run.isCompleted {
                     model.phase = .finished
                     model.cancelRequested = false
@@ -336,9 +352,21 @@ final class CloudRunEngine {
                 }
             } catch is CancellationError {
                 return
-            } catch let e as GitHubError where e.status == 401 || e.status == 404 {
+            } catch let e as GitHubError where e.status == 401 {
                 fail(e.localizedDescription)
                 return
+            } catch let e as GitHubError where e.status == 404 {
+                // GitHub risponde 404 per qualche istante subito dopo la creazione della run
+                // (repliche non ancora allineate) o per un intoppo momentaneo: si riprova.
+                // Solo un 404 che persiste per 10 minuti è considerato definitivo.
+                let since = notFoundSince ?? Date()
+                notFoundSince = since
+                if Date().timeIntervalSince(since) > 600 {
+                    fail("run #\(runId) non trovata su GitHub (404): eliminata o non più visibile con questo token")
+                    return
+                }
+                failures += 1
+                model.transientError = "GitHub non trova ancora la run (404) — nuovo tentativo…"
             } catch {
                 failures += 1
                 model.transientError = "\(error.localizedDescription) — nuovo tentativo…"
@@ -351,11 +379,22 @@ final class CloudRunEngine {
             } else {
                 interval = model.run?.status == "in_progress" ? 3 : 5
             }
-            try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            // attesa a piccoli passi: una richiesta di aggiornamento interrompe l'attesa
+            let wake = Date().addingTimeInterval(interval)
+            while Date() < wake, !Task.isCancelled {
+                if model.jobs.contains(where: \.refreshRequested) { break }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
         }
     }
 
     private func merge(_ jobs: [GHJob]) {
+        // stessi job nello stesso ordine: si aggiornano solo quelli cambiati, senza
+        // riassegnare l'array (che ridisegnerebbe l'intera schermata a ogni giro)
+        if jobs.map(\.id) == model.jobs.map(\.id) {
+            for (m, j) in zip(model.jobs, jobs) where m.job != j { m.job = j }
+            return
+        }
         var byId: [Int: CloudJobModel] = [:]
         for j in model.jobs { byId[j.id] = j }
         model.jobs = jobs.map { j in
@@ -370,18 +409,27 @@ final class CloudRunEngine {
     /// Log e annotazioni: completi per i job terminati, parziali (ogni 15 s) per quelli in corso.
     private func refreshLogs(final: Bool) async throws {
         var fetched = 0
+        let lowRate = (api.rateRemaining ?? 5000) < 800
         for jm in model.jobs {
             if Task.isCancelled { return }
+            let requested = jm.refreshRequested
+            jm.refreshRequested = false
             let completed = jm.job.isCompleted
             if completed && jm.logState == .complete { continue }
             if case .unavailable = jm.logState, completed { continue }
+            let watched = jm.watchers > 0
             if !completed {
                 guard jm.job.status == "in_progress" else { continue }
-                if let last = jm.lastLogAttempt, Date().timeIntervalSince(last) < 15 { continue }
+                // log parziale ogni 15 s, anche con il job aperto sullo schermo.
+                // Uno step appena terminato si scarica subito (il suo log è ora completo).
+                let gap: TimeInterval = lowRate ? 30 : 15
+                let stepFinished = jm.stepsDone != jm.stepsDoneAtLastLog
+                if !requested, !stepFinished, let last = jm.lastLogAttempt, Date().timeIntervalSince(last) < gap { continue }
             }
-            if fetched >= (final ? 50 : 3) { break }
+            if fetched >= (final ? 50 : 3) && !watched && !requested { continue }
             fetched += 1
             jm.lastLogAttempt = Date()
+            jm.stepsDoneAtLastLog = jm.stepsDone
             if jm.logState == .none { jm.logState = .loading }
             await loadLog(jm, partial: !completed)
             if completed && !jm.annotationsLoaded {
@@ -399,9 +447,13 @@ final class CloudRunEngine {
                 let parsed = GitHubJobLog.parse(text)
                 return (parsed.map(\.line), GitHubJobLog.split(parsed, steps: steps))
             }.value
-            jm.fullLog = lines
-            jm.stepLogs = split
-            jm.logState = partial ? .partial : .complete
+            // log invariato (frequente per i job in coda o fermi): nessun ridisegno
+            if jm.fullLog.count != lines.count || jm.fullLog.last != lines.last {
+                jm.fullLog = lines
+                jm.stepLogs = split
+            }
+            let state: CloudJobModel.LogState = partial ? .partial : .complete
+            if jm.logState != state { jm.logState = state }
         } catch let e as GitHubError where e.status == 404 || e.status == 410 {
             if partial {
                 if jm.logState == .loading { jm.logState = .none }

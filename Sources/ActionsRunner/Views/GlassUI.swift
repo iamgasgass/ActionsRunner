@@ -35,7 +35,11 @@ struct AppGlassBackground: View {
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
+        // sfondo statico: rasterizzato in un'unica texture invece di ricomporre i livelli
+        // a ogni fotogramma (push/pop della navigazione, scorrimento)
+        .drawingGroup()
         .ignoresSafeArea()
+        .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
 
@@ -56,16 +60,11 @@ struct AppGlassBackground: View {
                 endPoint: .bottomTrailing
             )
 
-            Circle()
-                .fill(Color(red: 0.72, green: 0.78, blue: 0.86).opacity(0.045))
-                .frame(width: proxy.size.width * 0.78)
-                .blur(radius: 100)
+            SoftGlow(color: Color(red: 0.72, green: 0.78, blue: 0.86).opacity(0.045),
+                     diameter: proxy.size.width * 0.78, blur: 100)
                 .offset(x: proxy.size.width * 0.42, y: -proxy.size.height * 0.34)
 
-            Circle()
-                .fill(Color.white.opacity(0.022))
-                .frame(width: proxy.size.width * 0.66)
-                .blur(radius: 90)
+            SoftGlow(color: Color.white.opacity(0.022), diameter: proxy.size.width * 0.66, blur: 90)
                 .offset(x: -proxy.size.width * 0.50, y: proxy.size.height * 0.10)
 
             LinearGradient(
@@ -91,16 +90,11 @@ struct AppGlassBackground: View {
                 endPoint: .bottomTrailing
             )
 
-            Circle()
-                .fill(Color(red: 0.62, green: 0.70, blue: 0.84).opacity(0.22))
-                .frame(width: proxy.size.width * 0.78)
-                .blur(radius: 100)
+            SoftGlow(color: Color(red: 0.62, green: 0.70, blue: 0.84).opacity(0.22),
+                     diameter: proxy.size.width * 0.78, blur: 100)
                 .offset(x: proxy.size.width * 0.42, y: -proxy.size.height * 0.34)
 
-            Circle()
-                .fill(Color.white.opacity(0.70))
-                .frame(width: proxy.size.width * 0.66)
-                .blur(radius: 90)
+            SoftGlow(color: Color.white.opacity(0.70), diameter: proxy.size.width * 0.66, blur: 90)
                 .offset(x: -proxy.size.width * 0.50, y: proxy.size.height * 0.10)
 
             LinearGradient(
@@ -109,6 +103,34 @@ struct AppGlassBackground: View {
                 endPoint: .bottom
             )
         }
+    }
+}
+
+/// Alone morbido: stesso aspetto di un cerchio sfocato (`blur`), ma disegnato con un
+/// gradiente radiale, che non richiede il costoso filtro di sfocatura gaussiana.
+private struct SoftGlow: View {
+    let color: Color
+    let diameter: CGFloat
+    let blur: CGFloat
+
+    var body: some View {
+        let r = diameter / 2
+        let outer = r + blur * 1.4
+        // l'ingombro resta quello del cerchio originale; l'alone sborda come faceva la sfocatura
+        Color.clear
+            .frame(width: diameter, height: diameter)
+            .overlay {
+                RadialGradient(
+                    stops: [
+                        .init(color: color, location: 0),
+                        .init(color: color, location: max(0, (r - blur) / outer)),
+                        .init(color: color.opacity(0.5), location: r / outer),
+                        .init(color: color.opacity(0), location: 1),
+                    ],
+                    center: .center, startRadius: 0, endRadius: outer
+                )
+                .frame(width: outer * 2, height: outer * 2)
+            }
     }
 }
 
@@ -170,11 +192,20 @@ struct GlassIconBadge: View {
 private struct LiquidGlassCardModifier: ViewModifier {
     var cornerRadius: CGFloat
     var borderOpacity: Double
+    var shadow: Bool
 
     func body(content: Content) -> some View {
+        if shadow {
+            card(content).shadow(color: Color.glassShadow, radius: 18, x: 0, y: 9)
+        } else {
+            card(content)
+        }
+    }
+
+    private func card(_ content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
 
-        content
+        return content
             .background {
                 if #available(iOS 26.0, *) {
                     shape.fill(Color.clear).glassEffect(.regular, in: shape)
@@ -185,15 +216,16 @@ private struct LiquidGlassCardModifier: ViewModifier {
             .overlay {
                 shape.strokeBorder(Color.glassLine.opacity(borderOpacity), lineWidth: 0.8)
             }
-            .shadow(color: Color.glassShadow, radius: 18, x: 0, y: 9)
     }
 }
 
 extension View {
     /// Uses real system Liquid Glass on iOS 26 and a subtle material surface on
     /// earlier systems. The shape follows the card's bounds.
-    func liquidGlassCard(cornerRadius: CGFloat = 26, borderOpacity: Double = 0.14) -> some View {
-        modifier(LiquidGlassCardModifier(cornerRadius: cornerRadius, borderOpacity: borderOpacity))
+    /// `shadow: false` per righe ripetute e riquadri interni: l'ombra sfocata di ogni elemento
+    /// va calcolata fuori schermo ed è la causa principale di scatti durante lo scorrimento.
+    func liquidGlassCard(cornerRadius: CGFloat = 26, borderOpacity: Double = 0.14, shadow: Bool = true) -> some View {
+        modifier(LiquidGlassCardModifier(cornerRadius: cornerRadius, borderOpacity: borderOpacity, shadow: shadow))
     }
 }
 
@@ -243,7 +275,7 @@ struct GlassTextFieldSurface<Content: View>: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .liquidGlassCard(cornerRadius: 17, borderOpacity: 0.11)
+            .liquidGlassCard(cornerRadius: 17, borderOpacity: 0.11, shadow: false)
     }
 }
 
@@ -379,7 +411,7 @@ extension View {
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .liquidGlassCard(cornerRadius: 22, borderOpacity: 0.11)
+            .liquidGlassCard(cornerRadius: 22, borderOpacity: 0.11, shadow: false)
     }
 
     /// Riquadro interno (raggio 18, padding 14).
@@ -387,7 +419,7 @@ extension View {
         self
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .liquidGlassCard(cornerRadius: 18, borderOpacity: 0.10)
+            .liquidGlassCard(cornerRadius: 18, borderOpacity: 0.10, shadow: false)
     }
 }
 

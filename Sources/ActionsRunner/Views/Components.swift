@@ -230,7 +230,7 @@ struct KeyValueEditor: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 4)
-                .liquidGlassCard(cornerRadius: 18, borderOpacity: 0.10)
+                .liquidGlassCard(cornerRadius: 18, borderOpacity: 0.10, shadow: false)
             }
 
             GlassFieldLabel("Nome")

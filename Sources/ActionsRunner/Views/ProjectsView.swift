@@ -76,8 +76,9 @@ struct ProjectsView: View {
 
 struct ProjectRow: View {
     let project: Project
+    @State private var workflowCount: Int?
+
     var body: some View {
-        let workflows = WorkflowParser.loadWorkflows(in: project.repoURL).workflows
         HStack(spacing: 14) {
             GlassIconBadge(symbol: "shippingbox", size: 48)
             VStack(alignment: .leading, spacing: 5) {
@@ -87,7 +88,7 @@ struct ProjectRow: View {
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                 HStack(spacing: 10) {
-                    Label("\(workflows.count)", systemImage: "gearshape.2")
+                    Label(workflowCount.map(String.init) ?? "–", systemImage: "gearshape.2")
                     Label("\(project.fileCount)", systemImage: "doc")
                     Text(Format.bytes(project.sizeBytes))
                 }
@@ -104,6 +105,12 @@ struct ProjectRow: View {
             GlassChevron()
         }
         .glassRow()
+        .task(id: project.repoURL) {
+            let url = project.repoURL
+            workflowCount = await Task.detached(priority: .userInitiated) {
+                WorkflowParser.loadWorkflows(in: url).workflows.count
+            }.value
+        }
     }
 }
 
@@ -193,8 +200,8 @@ struct ProjectDetailView: View {
                 Button("Salva") { var p = project; p.name = newName; store.update(p) }
                 Button("Annulla", role: .cancel) {}
             }
-            .task { reload(project) }
-            .refreshable { reload(project) }
+            .task { await reload(project) }
+            .refreshable { await reload(project) }
         } else {
             ZStack {
                 AppGlassBackground()
@@ -204,8 +211,10 @@ struct ProjectDetailView: View {
         }
     }
 
-    private func reload(_ p: Project) {
-        let r = WorkflowParser.loadWorkflows(in: p.repoURL)
+    /// Lettura e analisi dei workflow fuori dal main thread: la navigazione resta fluida.
+    private func reload(_ p: Project) async {
+        let url = p.repoURL
+        let r = await Task.detached(priority: .userInitiated) { WorkflowParser.loadWorkflows(in: url) }.value
         workflows = r.workflows
         loadErrors = r.errors
     }
@@ -251,15 +260,17 @@ struct FileBrowserView: View {
     let url: URL
     let title: String
     @State private var items: [URL] = []
+    @State private var info: [URL: (isDir: Bool, size: Int64)] = [:]
+    @State private var loaded = false
 
     var body: some View {
         GlassScreen(spacing: 12) {
-            if items.isEmpty {
+            if loaded && items.isEmpty {
                 GlassEmptyState(symbol: "folder", title: "Cartella vuota", message: url.lastPathComponent)
             }
             LazyVStack(spacing: 10) {
                 ForEach(items, id: \.self) { item in
-                    if AppPaths.isDirectory(item) {
+                    if info[item]?.isDir == true {
                         NavigationLink {
                             FileBrowserView(root: root, url: item, title: item.lastPathComponent)
                         } label: {
@@ -271,7 +282,7 @@ struct FileBrowserView: View {
                             FileViewer(url: item)
                         } label: {
                             fileRow(item, symbol: icon(item),
-                                    detail: Format.bytes(Int64(((try? FileManager.default.attributesOfItem(atPath: item.path))?[.size] as? NSNumber)?.intValue ?? 0)))
+                                    detail: Format.bytes(info[item]?.size ?? 0))
                         }
                         .buttonStyle(.plain)
                     }
@@ -280,14 +291,27 @@ struct FileBrowserView: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            let fm = FileManager.default
-            let all = (try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? []
-            items = all.sorted { a, b in
-                let da = AppPaths.isDirectory(a), db = AppPaths.isDirectory(b)
-                if da != db { return da }
-                return a.lastPathComponent.localizedStandardCompare(b.lastPathComponent) == .orderedAscending
-            }
+        .task {
+            guard !loaded else { return }
+            let dir = url
+            let (sorted, meta) = await Task.detached(priority: .userInitiated) { () -> ([URL], [URL: (isDir: Bool, size: Int64)]) in
+                let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey]
+                let all = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys)) ?? []
+                var meta: [URL: (isDir: Bool, size: Int64)] = [:]
+                for u in all {
+                    let v = try? u.resourceValues(forKeys: Set(keys))
+                    meta[u] = (v?.isDirectory ?? false, Int64(v?.fileSize ?? 0))
+                }
+                let sorted = all.sorted { a, b in
+                    let da = meta[a]?.isDir ?? false, db = meta[b]?.isDir ?? false
+                    if da != db { return da }
+                    return a.lastPathComponent.localizedStandardCompare(b.lastPathComponent) == .orderedAscending
+                }
+                return (sorted, meta)
+            }.value
+            info = meta
+            items = sorted
+            loaded = true
         }
     }
 
@@ -324,6 +348,7 @@ struct FileBrowserView: View {
 struct FileViewer: View {
     let url: URL
     @State private var text: String?
+    @State private var textLoaded = false
     @State private var editing = false
     @State private var draft = ""
 
@@ -351,6 +376,8 @@ struct FileViewer: View {
                     }
                     .liquidGlassCard(cornerRadius: 22, borderOpacity: 0.11)
                     .padding(18)
+                } else if !textLoaded {
+                    ProgressView().tint(Color.glassInk)
                 } else {
                     GlassEmptyState(symbol: "doc", title: "File binario", message: url.lastPathComponent)
                         .padding(18)
@@ -375,10 +402,14 @@ struct FileViewer: View {
             }
             ToolbarItem(placement: .topBarTrailing) { ShareLink(item: url) }
         }
-        .onAppear {
-            if let data = try? Data(contentsOf: url), data.count < 5_000_000, !data.prefix(8000).contains(0) {
-                text = String(decoding: data, as: UTF8.self)
-            }
+        .task {
+            guard !textLoaded else { return }
+            let u = url
+            text = await Task.detached(priority: .userInitiated) { () -> String? in
+                guard let data = try? Data(contentsOf: u), data.count < 5_000_000, !data.prefix(8000).contains(0) else { return nil }
+                return String(decoding: data, as: UTF8.self)
+            }.value
+            textLoaded = true
         }
     }
 }

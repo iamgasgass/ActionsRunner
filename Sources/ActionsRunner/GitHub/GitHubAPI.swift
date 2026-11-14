@@ -155,6 +155,13 @@ final class GitHubAPI: @unchecked Sendable {
     private var _rateRemaining: Int?
     private var _rateReset: Date?
 
+    /// Notificato quando il client attende per un limite di GitHub (secondi di attesa).
+    var onRateLimitWait: ((Int) -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return _onRateLimitWait }
+        set { lock.lock(); _onRateLimitWait = newValue; lock.unlock() }
+    }
+    private var _onRateLimitWait: ((Int) -> Void)?
+
     var rateRemaining: Int? { lock.lock(); defer { lock.unlock() }; return _rateRemaining }
     var rateReset: Date? { lock.lock(); defer { lock.unlock() }; return _rateReset }
 
@@ -295,12 +302,14 @@ final class GitHubAPI: @unchecked Sendable {
                 let bodyText = String(data: data, encoding: .utf8) ?? ""
                 let rateLimited = http.statusCode == 429 ||
                     (http.statusCode == 403 && (remaining == 0 || bodyText.localizedCaseInsensitiveContains("rate limit")))
-                if rateLimited && attempt <= 3 {
-                    var wait = retryAfter ?? 60
+                if rateLimited && attempt <= 8 {
+                    // limite secondario: Retry-After o 60 s (poi crescente); limite primario: fino al reset
+                    var wait = retryAfter ?? min(300, 60 * pow(1.5, Double(attempt - 1)))
                     if retryAfter == nil, remaining == 0, let reset = rateReset { wait = max(5, reset.timeIntervalSinceNow + 1) }
-                    if wait > 120 {
+                    if wait > 900 {
                         throw GitHubError(status: http.statusCode, message: "limite di richieste di GitHub raggiunto: riprova tra \(Int(wait / 60) + 1) minuti")
                     }
+                    onRateLimitWait?(Int(wait))
                     try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
                     continue
                 }

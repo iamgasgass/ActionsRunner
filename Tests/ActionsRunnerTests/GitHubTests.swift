@@ -37,6 +37,27 @@ final class GitHubTests: XCTestCase {
         XCTAssertEqual(RepoUploader.blobSHA(Data()), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391")
     }
 
+    func testInlineTextDetection() {
+        XCTAssertTrue(RepoUploader.isInlineText(Data("name: CI\r\non: push\n✓\n".utf8)))
+        XCTAssertFalse(RepoUploader.isInlineText(Data([0x89, 0x50, 0x4E, 0x47, 0x00, 0x01])))
+        XCTAssertFalse(RepoUploader.isInlineText(Data([0xFF, 0xFE, 0x41])))
+        XCTAssertFalse(RepoUploader.isInlineText(Data(repeating: 0x41, count: Int(RepoUploader.maxInlineSize) + 1)))
+    }
+
+    func testTreeTimeoutIsSplittable() {
+        let timeout = GitHubError(status: 422, message: "Sorry, your request timed out.  It's likely that your input was too large to process.")
+        XCTAssertTrue(RepoUploader.isTooLarge(timeout))
+        XCTAssertTrue(RepoUploader.isTooLarge(GitHubError(status: 502, message: "Bad Gateway")))
+        XCTAssertFalse(RepoUploader.isTooLarge(GitHubError(status: 422, message: "Invalid tree info")))
+    }
+
+    func testTreeEntryJSON() throws {
+        let del = try RepoUploader.TreeEntry.delete(path: "a", mode: "100644", type: "blob").json()
+        XCTAssertTrue(del["sha"] is NSNull)
+        let data = try JSONSerialization.data(withJSONObject: ["tree": [del]])
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("\"sha\":null"))
+    }
+
     func testDispatchResponseRunId() {
         let d1 = Data(#"{"workflow_run_id": 123456, "run_url": "https://api.github.com/repos/o/r/actions/runs/123456"}"#.utf8)
         XCTAssertEqual(GitHubActions.runId(fromDispatchResponse: d1), 123456)

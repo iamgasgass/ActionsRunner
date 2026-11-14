@@ -2,9 +2,14 @@ import CryptoKit
 import Foundation
 
 /// Pubblica il contenuto di un progetto su un branch GitHub con la Git Data API (nessun git locale).
-/// - calcola in locale gli SHA-1 dei blob git, quindi carica SOLO i file che GitHub non ha già
-///   (confronto con l'albero del branch + cache dei blob già caricati);
-/// - crea un albero completo (snapshot esatto della cartella: i file rimossi spariscono anche dal branch);
+/// Funziona con progetti di qualsiasi dimensione:
+/// - calcola in locale gli SHA-1 git e invia SOLO ciò che è cambiato rispetto al branch
+///   (albero costruito sopra quello attuale con `base_tree`, file rimossi con `sha: null`);
+/// - costruisce l'albero a blocchi (≤ 400 voci / ~1,5 MB) concatenati con `base_tree`; se GitHub
+///   va in timeout (422) il blocco viene diviso automaticamente a metà;
+/// - i file di testo viaggiano dentro l'albero (`content`), quindi niente richiesta per file:
+///   si evitano i limiti secondari di GitHub sulla creazione di contenuti; solo i binari diventano blob;
+/// - alla fine confronta l'albero ottenuto con gli SHA-1 locali e corregge eventuali differenze;
 /// - crea il commit con il commit precedente come genitore (la storia non viene riscritta).
 final class RepoUploader: @unchecked Sendable {
     struct Result {
@@ -23,9 +28,46 @@ final class RepoUploader: @unchecked Sendable {
         let sha: String
         let size: Int64
         let symlinkTarget: String?
+        /// UTF-8 valido, senza byte nulli e non troppo grande: può viaggiare dentro l'albero.
+        let isText: Bool
+    }
+
+    /// Voce dell'albero; il contenuto dei file di testo viene letto solo quando si invia il suo blocco.
+    enum TreeEntry {
+        case sha(path: String, mode: String, sha: String)
+        case inline(path: String, mode: String, file: LocalFile)
+        case delete(path: String, mode: String, type: String)
+
+        var estimatedBytes: Int {
+            switch self {
+            case .sha(let p, _, _): return p.utf8.count + 80
+            case .inline(let p, _, let f): return p.utf8.count + Int(f.size) + 80
+            case .delete(let p, _, _): return p.utf8.count + 80
+            }
+        }
+
+        func json() throws -> [String: Any] {
+            switch self {
+            case .sha(let p, let m, let sha):
+                return ["path": p, "mode": m, "type": "blob", "sha": sha]
+            case .inline(let p, let m, let f):
+                let text: String
+                if let t = f.symlinkTarget {
+                    text = t
+                } else {
+                    text = String(decoding: try Data(contentsOf: f.url, options: .mappedIfSafe), as: UTF8.self)
+                }
+                return ["path": p, "mode": m, "type": "blob", "content": text]
+            case .delete(let p, let m, let t):
+                return ["path": p, "mode": m, "type": t, "sha": NSNull()]
+            }
+        }
     }
 
     static let maxBlobSize: Int64 = 100 * 1024 * 1024
+    static let maxInlineSize: Int64 = 512 * 1024
+    static let chunkEntries = 400
+    static let chunkBytes = 1_500_000
 
     let api: GitHubAPI
     let repo: String    // owner/name
@@ -45,28 +87,33 @@ final class RepoUploader: @unchecked Sendable {
         return h.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
+    static func isInlineText(_ data: Data) -> Bool {
+        guard Int64(data.count) <= maxInlineSize, !data.contains(0) else { return false }
+        return String(data: data, encoding: .utf8) != nil
+    }
+
     /// Elenco dei file del progetto con modalità git e SHA-1 (esclusa la cartella .git).
     static func scan(_ dir: URL) throws -> [LocalFile] {
         let fm = FileManager.default
         var out: [LocalFile] = []
         for f in ZipUtil.listFiles(in: dir) {
             let comps = f.relative.split(separator: "/")
-            if comps.contains(".git") || f.relative == ".DS_Store" || comps.last == ".DS_Store" { continue }
+            if comps.contains(".git") || comps.last == ".DS_Store" { continue }
             if let target = try? fm.destinationOfSymbolicLink(atPath: f.url.path) {
                 let data = Data(target.utf8)
                 out.append(LocalFile(path: f.relative, url: f.url, mode: "120000", sha: blobSHA(data),
-                                     size: Int64(data.count), symlinkTarget: target))
+                                     size: Int64(data.count), symlinkTarget: target, isText: true))
                 continue
             }
             let attrs = try fm.attributesOfItem(atPath: f.url.path)
             let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
             if size > maxBlobSize {
-                throw GitHubError(status: 0, message: "\(f.relative) supera 100 MB, il limite di GitHub per un singolo file")
+                throw GitHubError(status: 0, message: "\(f.relative) supera 100 MB, il limite di GitHub per un singolo file (servirebbe Git LFS)")
             }
             let perms = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? 0o644
             let data = try Data(contentsOf: f.url, options: .mappedIfSafe)
             out.append(LocalFile(path: f.relative, url: f.url, mode: (perms & 0o111) != 0 ? "100755" : "100644",
-                                 sha: blobSHA(data), size: size, symlinkTarget: nil))
+                                 sha: blobSHA(data), size: size, symlinkTarget: nil, isText: isInlineText(data)))
         }
         return out
     }
@@ -83,7 +130,7 @@ final class RepoUploader: @unchecked Sendable {
     }
 
     private func saveKnownBlobs(_ set: Set<String>) {
-        let list = set.count > 50_000 ? Array(set).suffix(50_000) : Array(set)
+        let list = set.count > 100_000 ? Array(Array(set).suffix(100_000)) : Array(set)
         try? list.joined(separator: "\n").write(to: cacheURL, atomically: true, encoding: .utf8)
     }
 
@@ -99,6 +146,9 @@ final class RepoUploader: @unchecked Sendable {
         let total = files.reduce(Int64(0)) { $0 + $1.size }
         log("\(files.count) file, \(Format.bytes(total))")
 
+        api.onRateLimitWait = { seconds in log("Limite di richieste di GitHub: attendo \(seconds) s e continuo…") }
+        defer { api.onRateLimitWait = nil }
+
         // stato attuale del branch
         var head = try await headCommit(branch: branch)
         if head == nil, try await isEmptyRepository() {
@@ -107,64 +157,81 @@ final class RepoUploader: @unchecked Sendable {
             head = try await headCommit(branch: branch)
         }
 
-        var remote: [String: (mode: String, sha: String)] = [:]
+        var remote: [String: (mode: String, sha: String, type: String)]?
         var known = loadKnownBlobs()
         var currentTree: String?
         if let h = head {
             let commit: GHGitCommit = try await api.get("\(base)/git/commits/\(h)")
             currentTree = commit.tree.sha
             let tree: GHTree = try await api.get("\(base)/git/trees/\(commit.tree.sha)", query: ["recursive": "1"])
-            for e in tree.tree where e.type == "blob" {
-                remote[e.path] = (e.mode, e.sha)
-                known.insert(e.sha)
+            var map: [String: (mode: String, sha: String, type: String)] = [:]
+            for e in tree.tree where e.type != "tree" {
+                map[e.path] = (e.mode, e.sha, e.type)
+                if e.type == "blob" { known.insert(e.sha) }
+            }
+            if tree.truncated == true {
+                log("Albero remoto molto grande (elenco troncato da GitHub): ricostruisco il branch per intero")
+            } else {
+                remote = map
             }
         }
 
+        // cosa inviare
         let localPaths = Set(files.map(\.path))
-        let changed = files.filter { remote[$0.path]?.sha != $0.sha || remote[$0.path]?.mode != $0.mode }.count
-            + remote.keys.filter { !localPaths.contains($0) }.count
-        let missing = Dictionary(grouping: files.filter { !known.contains($0.sha) }, by: { $0.sha }).compactMap { $0.value.first }
-        if missing.isEmpty {
-            log("Nessun file da caricare: tutti i contenuti sono già su GitHub")
+        let changed: [LocalFile]
+        var deletions: [String] = []
+        let incremental = remote != nil && currentTree != nil
+        if let remote, incremental {
+            changed = files.filter { remote[$0.path]?.sha != $0.sha || remote[$0.path]?.mode != $0.mode }
+            deletions = remote.keys.filter { !localPaths.contains($0) }.sorted()
         } else {
-            let bytes = missing.reduce(Int64(0)) { $0 + $1.size }
-            log("Caricamento di \(missing.count) file (\(Format.bytes(bytes)))…")
+            changed = files
+        }
+        log(incremental
+            ? "\(changed.count) file modificati o nuovi, \(deletions.count) da rimuovere"
+            : "Costruzione completa dell'albero (\(files.count) file)")
+
+        // blob solo per i binari che GitHub non ha già
+        let binaries = Dictionary(grouping: changed.filter { !$0.isText && !known.contains($0.sha) }, by: \.sha).compactMap { $0.value.first }
+        var uploaded = 0
+        if !binaries.isEmpty {
+            log("Caricamento di \(binaries.count) file binari (\(Format.bytes(binaries.reduce(Int64(0)) { $0 + $1.size })))…")
+            uploaded = try await uploadBlobs(binaries, known: &known, progress: { p in progress(p * 0.5) })
         }
 
-        // caricamento parallelo (4 alla volta) dei blob mancanti
-        var uploaded = 0
-        let api = self.api
-        let base = self.base
-        try await withThrowingTaskGroup(of: String.self) { group in
-            var index = 0
-            while index < missing.count && index < 4 {
-                let f = missing[index]
-                index += 1
-                group.addTask { try await RepoUploader.uploadBlob(f, api: api, base: base) }
-            }
-            while let sha = try await group.next() {
-                known.insert(sha)
-                uploaded += 1
-                progress(Double(uploaded) / Double(max(missing.count, 1)))
-                if index < missing.count {
-                    let f = missing[index]
-                    index += 1
-                    group.addTask { try await RepoUploader.uploadBlob(f, api: api, base: base) }
-                }
+        // voci dell'albero: prima le rimozioni (un file può diventare cartella), poi testo inline e sha
+        var entries: [TreeEntry] = deletions.map { p in
+            .delete(path: p, mode: remote?[p]?.mode ?? "100644", type: remote?[p]?.type ?? "blob")
+        }
+        for f in changed {
+            if known.contains(f.sha) || !f.isText {
+                entries.append(.sha(path: f.path, mode: f.mode, sha: f.sha))
+            } else {
+                entries.append(.inline(path: f.path, mode: f.mode, file: f))
             }
         }
+
+        var treeSha = currentTree ?? ""
+        if !entries.isEmpty {
+            treeSha = try await buildTree(entries, base: incremental ? currentTree : nil, log: log,
+                                          progress: { p in progress(0.5 + p * 0.5) })
+        }
+        progress(1)
+
+        // verifica: ogni file locale deve avere esattamente il suo SHA-1 nell'albero finale
+        if !treeSha.isEmpty {
+            treeSha = try await verifyAndRepair(treeSha: treeSha, files: files, known: &known, log: log)
+        }
+        for f in files { known.insert(f.sha) }
         saveKnownBlobs(known)
 
-        // albero completo
-        let entries: [[String: Any]] = files.map { ["path": $0.path, "mode": $0.mode, "type": "blob", "sha": $0.sha] }
-        let tree: GHSha = try await api.post("\(base)/git/trees", json: ["tree": entries], idempotent: true)
-        if let h = head, tree.sha == currentTree, !forceCommit {
+        if let h = head, treeSha == currentTree, !forceCommit {
             log("Contenuto identico all'ultimo commit di \(branch) (\(h.prefix(7))): nessun nuovo commit")
-            return Result(commitSha: h, treeSha: tree.sha, createdCommit: false, changedFiles: 0,
+            return Result(commitSha: h, treeSha: treeSha, createdCommit: false, changedFiles: 0,
                           uploadedBlobs: uploaded, totalFiles: files.count)
         }
         let commit: GHSha = try await api.post("\(base)/git/commits",
-                                               json: ["message": message, "tree": tree.sha, "parents": head.map { [$0] } ?? [String]()],
+                                               json: ["message": message, "tree": treeSha, "parents": head.map { [$0] } ?? [String]()],
                                                idempotent: true)
         do {
             if head != nil {
@@ -175,9 +242,121 @@ final class RepoUploader: @unchecked Sendable {
         } catch let e as GitHubError {
             throw RepoUploader.explain(e)
         }
-        log("Commit \(commit.sha.prefix(7)) su \(branch): \(changed) file modificati")
-        return Result(commitSha: commit.sha, treeSha: tree.sha, createdCommit: true, changedFiles: changed,
+        let changedCount = incremental ? changed.count + deletions.count : files.count
+        log("Commit \(commit.sha.prefix(7)) su \(branch): \(changedCount) file \(incremental ? "modificati" : "inviati")")
+        return Result(commitSha: commit.sha, treeSha: treeSha, createdCommit: true, changedFiles: changedCount,
                       uploadedBlobs: uploaded, totalFiles: files.count)
+    }
+
+    // MARK: Albero a blocchi
+
+    /// Crea l'albero a blocchi concatenati con base_tree. Restituisce lo SHA dell'albero finale.
+    private func buildTree(_ entries: [TreeEntry], base: String?,
+                           log: (String) -> Void, progress: (Double) -> Void) async throws -> String {
+        var chunks: [[TreeEntry]] = []
+        var current: [TreeEntry] = []
+        var bytes = 0
+        for e in entries {
+            let b = e.estimatedBytes
+            if !current.isEmpty && (current.count >= RepoUploader.chunkEntries || bytes + b > RepoUploader.chunkBytes) {
+                chunks.append(current)
+                current = []
+                bytes = 0
+            }
+            current.append(e)
+            bytes += b
+        }
+        if !current.isEmpty { chunks.append(current) }
+        if chunks.count > 1 { log("Albero in \(chunks.count) blocchi…") }
+
+        var tree = base
+        for (i, chunk) in chunks.enumerated() {
+            if Task.isCancelled { throw CancellationError() }
+            let json = try chunk.map { try $0.json() }
+            tree = try await createTreeChunk(json, base: tree, log: log)
+            progress(Double(i + 1) / Double(chunks.count))
+        }
+        guard let tree else { throw GitHubError(status: 0, message: "albero vuoto") }
+        return tree
+    }
+
+    /// Un blocco; se GitHub va in timeout (422) lo divide a metà e riprova.
+    private func createTreeChunk(_ entries: [[String: Any]], base: String?, log: (String) -> Void) async throws -> String {
+        var body: [String: Any] = ["tree": entries]
+        if let base { body["base_tree"] = base }
+        do {
+            let t: GHSha = try await api.post("\(base_path)/git/trees", json: body, idempotent: true)
+            return t.sha
+        } catch let e as GitHubError where RepoUploader.isTooLarge(e) && entries.count > 1 {
+            let mid = entries.count / 2
+            log("Blocco troppo grande per GitHub: lo divido (\(entries.count) → \(mid) + \(entries.count - mid))")
+            let first = try await createTreeChunk(Array(entries[..<mid]), base: base, log: log)
+            return try await createTreeChunk(Array(entries[mid...]), base: first, log: log)
+        }
+    }
+
+    private var base_path: String { base }
+
+    static func isTooLarge(_ e: GitHubError) -> Bool {
+        let m = e.message.lowercased()
+        return (e.status == 422 || e.status == 502 || e.status == 504 || e.status == 413)
+            && (m.contains("timed out") || m.contains("too large") || m.contains("timeout") || e.status != 422)
+    }
+
+    // MARK: Verifica finale
+
+    /// Confronta l'albero creato con gli SHA-1 locali; i file divergenti vengono reinviati come blob.
+    private func verifyAndRepair(treeSha: String, files: [LocalFile], known: inout Set<String>, log: (String) -> Void) async throws -> String {
+        let tree: GHTree = try await api.get("\(base)/git/trees/\(treeSha)", query: ["recursive": "1"])
+        if tree.truncated == true {
+            log("Verifica saltata: albero troppo grande per essere elencato da GitHub")
+            return treeSha
+        }
+        var remote: [String: (mode: String, sha: String)] = [:]
+        for e in tree.tree where e.type == "blob" { remote[e.path] = (e.mode, e.sha) }
+        let wrong = files.filter { remote[$0.path]?.sha != $0.sha || remote[$0.path]?.mode != $0.mode }
+        let localPaths = Set(files.map(\.path))
+        let extra = remote.keys.filter { !localPaths.contains($0) }
+        if wrong.isEmpty && extra.isEmpty {
+            log("Verifica completata: \(files.count) file identici al progetto")
+            return treeSha
+        }
+        log("Correzione di \(wrong.count + extra.count) voci dopo la verifica…")
+        let missing = Dictionary(grouping: wrong, by: \.sha).compactMap { $0.value.first }
+        _ = try await uploadBlobs(missing, known: &known, progress: { _ in })
+        var entries: [TreeEntry] = extra.map { .delete(path: $0, mode: remote[$0]?.mode ?? "100644", type: "blob") }
+        entries += wrong.map { .sha(path: $0.path, mode: $0.mode, sha: $0.sha) }
+        return try await buildTree(entries, base: treeSha, log: log, progress: { _ in })
+    }
+
+    // MARK: Blob (binari)
+
+    private func uploadBlobs(_ list: [LocalFile], known: inout Set<String>, progress: @escaping (Double) -> Void) async throws -> Int {
+        guard !list.isEmpty else { return 0 }
+        var uploaded = 0
+        let api = self.api
+        let base = self.base
+        var newShas: [String] = []
+        try await withThrowingTaskGroup(of: String.self) { group in
+            var index = 0
+            while index < list.count && index < 4 {
+                let f = list[index]
+                index += 1
+                group.addTask { try await RepoUploader.uploadBlob(f, api: api, base: base) }
+            }
+            while let sha = try await group.next() {
+                newShas.append(sha)
+                uploaded += 1
+                progress(Double(uploaded) / Double(list.count))
+                if index < list.count {
+                    let f = list[index]
+                    index += 1
+                    group.addTask { try await RepoUploader.uploadBlob(f, api: api, base: base) }
+                }
+            }
+        }
+        for s in newShas { known.insert(s) }
+        return uploaded
     }
 
     private static func uploadBlob(_ f: LocalFile, api: GitHubAPI, base: String) async throws -> String {
@@ -191,6 +370,8 @@ final class RepoUploader: @unchecked Sendable {
         }
         return created.sha
     }
+
+    // MARK: Errori e stato del repository
 
     static func explain(_ e: GitHubError) -> GitHubError {
         let m = e.message.lowercased()

@@ -342,7 +342,7 @@ struct CloudRunConfigView: View {
                             .padding(.horizontal, 14)
                             .padding(.vertical, 12)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .liquidGlassCard(cornerRadius: 17, borderOpacity: 0.11)
+                            .liquidGlassCard(cornerRadius: 17, borderOpacity: 0.11, shadow: false)
                         }
                         .buttonStyle(.plain)
                     }
@@ -522,7 +522,7 @@ struct CloudRunView: View {
 
             if model.runId != nil || model.webURL != nil {
                 VStack(alignment: .leading, spacing: 12) {
-                    if model.runId != nil, model.run?.isCompleted == false {
+                    if model.runId != nil, model.phase == .running, model.run?.isCompleted == false {
                         Button(role: .destructive) { act { try await runs.engine(for: model)?.cancelRun(force: model.cancelRequested) } } label: {
                             Label(model.cancelRequested ? "Forza l'annullamento" : "Annulla la run", systemImage: "stop.fill")
                                 .frame(maxWidth: .infinity)
@@ -563,7 +563,8 @@ struct CloudRunView: View {
                 }
             }
 
-            let annotations = model.jobs.flatMap { j in j.annotations.map { (j.job.name, $0) } }
+            let annotations = model.jobs.contains(where: { !$0.annotations.isEmpty })
+                ? model.jobs.flatMap { j in j.annotations.map { (j.job.name, $0) } } : []
             if !annotations.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
                     GlassSectionHeading(title: "Annotazioni", subtitle: "\(annotations.count) segnalazioni dai job.", symbol: "exclamationmark.bubble")
@@ -598,16 +599,14 @@ struct CloudRunView: View {
                     }
                     .buttonStyle(.plain)
                     if showSetup {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array(model.setupLog.enumerated()), id: \.offset) { _, l in
-                                Text(l)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        .glassInset()
-                        .transition(.opacity.combined(with: .move(edge: .top)))
+                        // un solo Text (invece di una vista selezionabile per riga): apertura immediata
+                        Text(model.setupLog.joined(separator: "\n"))
+                            .font(.system(.caption, design: .monospaced))
+                            .lineSpacing(4)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .glassInset()
+                            .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
                 .glassSection()
@@ -672,7 +671,7 @@ struct CloudRunView: View {
             if let p = model.uploadProgress {
                 ProgressView(value: p).tint(Color.glassInk)
             }
-            if model.run?.status == "queued" || model.run?.status == "waiting" {
+            if model.phase == .running, model.run?.status == "queued" || model.run?.status == "waiting" {
                 Text("In coda: in attesa di un runner di GitHub…").font(.footnote).foregroundStyle(.secondary)
             }
             if let e = model.transientError {
@@ -735,8 +734,77 @@ struct CloudJobView: View {
     @State private var expanded: Set<Int> = []
     @State private var expandedGroups: Set<Int> = []
     @State private var showFull = false
+    /// Segue le ultime righe del log (come su github.com) finché il job è in corso.
+    @State private var follow = true
+    /// Step chiusi a mano: non vengono riaperti automaticamente.
+    @State private var collapsedByUser: Set<Int> = []
+    /// Step aperti automaticamente perché in corso (si richiudono quando terminano bene).
+    @State private var autoExpanded: Set<Int> = []
+
+    private static let bottomID = "log-bottom"
+
+    private var runningStep: GHStep? { job.job.steps?.last(where: { $0.status == "in_progress" }) }
+    private var isLive: Bool { !job.job.isCompleted }
 
     var body: some View {
+        ScrollViewReader { proxy in
+            content
+                .onChange(of: job.fullLog.count) { _, _ in scrollToTail(proxy) }
+                .onChange(of: runningStep?.number) { old, n in
+                    // come su github.com: lo step terminato con successo si chiude, il nuovo si apre
+                    if let old, autoExpanded.contains(old),
+                       job.job.steps?.first(where: { $0.number == old })?.conclusion != "failure" {
+                        expanded.remove(old)
+                        autoExpanded.remove(old)
+                    }
+                    if let n, !collapsedByUser.contains(n), !expanded.contains(n) {
+                        expanded.insert(n)
+                        autoExpanded.insert(n)
+                    }
+                    scrollToTail(proxy)
+                }
+                .onChange(of: follow) { _, on in if on { scrollToTail(proxy) } }
+                .task {
+                    // apertura di un job in corso: si parte dalle ultime righe
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    scrollToTail(proxy)
+                }
+                .overlay(alignment: .bottom) {
+                    Group {
+                        if isLive && !follow {
+                            Button { follow = true } label: {
+                                Label("Segui il log", systemImage: "arrow.down.to.line")
+                                    .font(.system(.subheadline, design: .rounded, weight: .semibold))
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 10)
+                                    .liquidGlassCard(cornerRadius: 22, borderOpacity: 0.18)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.bottom, 18)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        }
+                    }
+                    .animation(.easeOut(duration: 0.2), value: follow)
+                }
+        }
+        .onAppear {
+            job.watchers += 1
+            if let failed = job.job.steps?.first(where: { $0.conclusion == "failure" }) { expanded.insert(failed.number) }
+            else if let running = runningStep {
+                expanded.insert(running.number)
+                autoExpanded.insert(running.number)
+            }
+            follow = isLive
+        }
+        .onDisappear { job.watchers = max(0, job.watchers - 1) }
+    }
+
+    private func scrollToTail(_ proxy: ScrollViewProxy) {
+        guard follow, isLive else { return }
+        withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+    }
+
+    private var content: some View {
         ZStack {
             AppGlassBackground()
 
@@ -756,7 +824,16 @@ struct CloudJobView: View {
                                 .padding(.bottom, 10)
                             if expanded.contains(step.number) {
                                 let lines = job.stepLogs[step.number] ?? []
-                                if lines.isEmpty {
+                                if lines.isEmpty && step.status == "in_progress" {
+                                    HStack(spacing: 10) {
+                                        ProgressView().tint(Color.glassInk)
+                                        Text("Step in esecuzione: l'output compare appena GitHub lo rende disponibile.")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    .padding(.horizontal, 4)
+                                    .padding(.bottom, 12)
+                                } else if lines.isEmpty {
                                     Text(step.status == "completed" ? "Nessuna riga di log per questo step." : "Log non ancora disponibili.")
                                         .font(.caption).foregroundStyle(.secondary)
                                         .padding(.horizontal, 4)
@@ -780,11 +857,14 @@ struct CloudJobView: View {
                         .glassSection()
                         .padding(.top, 8)
                     }
+
+                    Color.clear.frame(height: 1).id(Self.bottomID)
                 }
                 .padding(.horizontal, 18)
                 .padding(.top, 12)
-                .padding(.bottom, 36)
+                .padding(.bottom, isLive ? 80 : 36)
             }
+            .modifier(StopFollowOnScroll(follow: $follow))
         }
         .navigationTitle(job.job.name)
         .navigationBarTitleDisplayMode(.inline)
@@ -792,6 +872,7 @@ struct CloudJobView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Toggle("Log completo del job", isOn: $showFull)
+                    if isLive { Toggle("Segui il log", isOn: $follow) }
                     if !job.fullLog.isEmpty {
                         ShareLink(item: job.fullLog.map(\.text).joined(separator: "\n")) { Label("Condividi il log", systemImage: "square.and.arrow.up") }
                     }
@@ -801,16 +882,18 @@ struct CloudJobView: View {
                 } label: { Image(systemName: "ellipsis").font(.system(size: 15, weight: .semibold)) }
             }
         }
-        .onAppear {
-            if let failed = job.job.steps?.first(where: { $0.conclusion == "failure" }) { expanded.insert(failed.number) }
-            else if let running = job.job.steps?.last(where: { $0.status == "in_progress" }) { expanded.insert(running.number) }
-        }
     }
 
     private func stepHeader(_ step: GHStep) -> some View {
         Button {
             // senza animazione: espandere migliaia di righe animate causa sovrapposizioni
-            if expanded.contains(step.number) { expanded.remove(step.number) } else { expanded.insert(step.number) }
+            if expanded.contains(step.number) {
+                expanded.remove(step.number)
+                collapsedByUser.insert(step.number)
+            } else {
+                expanded.insert(step.number)
+                collapsedByUser.remove(step.number)
+            }
         } label: {
             HStack(spacing: 10) {
                 StatusIcon(api: step.status, conclusion: step.conclusion, size: 15)
@@ -821,9 +904,18 @@ struct CloudJobView: View {
                     .multilineTextAlignment(.leading)
                 Spacer(minLength: 4)
                 if step.startedAt != nil {
-                    Text(Format.apiDuration(step.startedAt, step.completedAt))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    if step.status == "in_progress" {
+                        // durata che scorre in tempo reale
+                        TimelineView(.periodic(from: .now, by: 1)) { _ in
+                            Text(Format.apiDuration(step.startedAt, nil))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text(Format.apiDuration(step.startedAt, step.completedAt))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Image(systemName: expanded.contains(step.number) ? "chevron.up" : "chevron.down")
                     .font(.caption.weight(.bold))
@@ -850,7 +942,7 @@ struct CloudJobView: View {
             if job.job.status == "queued" || job.job.status == "waiting" {
                 banner("Il job è in attesa di un runner.", symbol: "hourglass")
             } else if !job.job.isCompleted {
-                banner("I log compaiono durante l'esecuzione (aggiornati ogni 15 s) o al termine del job.", symbol: "clock.arrow.circlepath")
+                banner("In attesa dei primi log del job…", symbol: "clock.arrow.circlepath")
             }
         case .loading:
             HStack(spacing: 10) {
@@ -859,7 +951,7 @@ struct CloudJobView: View {
             }
             .glassInset()
         case .partial:
-            banner("Log parziali: il job è ancora in esecuzione.", symbol: "dot.radiowaves.left.and.right")
+            banner("Log in diretta: aggiornati ogni pochi secondi mentre il job è in esecuzione.", symbol: "dot.radiowaves.left.and.right")
         case .complete:
             EmptyView()
         case .unavailable(let m):
@@ -979,6 +1071,21 @@ struct ArtifactContentsView: View {
             } catch {
                 self.error = error.localizedDescription
             }
+        }
+    }
+}
+
+/// Smette di seguire il log quando l'utente scorre a mano (iOS 18+; su iOS 17 si usa il menu).
+private struct StopFollowOnScroll: ViewModifier {
+    @Binding var follow: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollPhaseChange { _, phase in
+                if phase == .interacting { follow = false }
+            }
+        } else {
+            content
         }
     }
 }

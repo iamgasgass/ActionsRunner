@@ -91,14 +91,40 @@ enum WorkflowParser {
     }
 
     /// Carica tutti i workflow da una cartella repo.
+    private static let cacheLock = NSLock()
+    private static var cache: [String: (signature: [String], result: (workflows: [Workflow], errors: [Diagnostic]))] = [:]
+
+    /// Workflow della repository. Il risultato è tenuto in cache finché nome, dimensione e data
+    /// di modifica dei file non cambiano: le viste possono chiamarla senza rileggere né
+    /// rianalizzare lo YAML a ogni ridisegno.
     static func loadWorkflows(in repoURL: URL) -> (workflows: [Workflow], errors: [Diagnostic]) {
         let dir = repoURL.appendingPathComponent(".github/workflows", isDirectory: true)
         let fm = FileManager.default
-        guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return ([], []) }
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey]
+        guard let all = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys) else { return ([], []) }
+        let files = all.filter { ["yml", "yaml"].contains($0.pathExtension.lowercased()) }
+            .sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+        let signature = files.map { f -> String in
+            let v = try? f.resourceValues(forKeys: Set(keys))
+            return "\(f.lastPathComponent)|\(v?.fileSize ?? -1)|\(v?.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+        }
+        cacheLock.lock()
+        if let c = cache[dir.path], c.signature == signature {
+            cacheLock.unlock()
+            return c.result
+        }
+        cacheLock.unlock()
+        let result = parseFiles(files)
+        cacheLock.lock()
+        cache[dir.path] = (signature, result)
+        cacheLock.unlock()
+        return result
+    }
+
+    private static func parseFiles(_ files: [URL]) -> (workflows: [Workflow], errors: [Diagnostic]) {
         var workflows: [Workflow] = []
         var errors: [Diagnostic] = []
-        for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
-            where ["yml", "yaml"].contains(file.pathExtension.lowercased()) {
+        for file in files {
             let rel = ".github/workflows/" + file.lastPathComponent
             do {
                 let text = try String(contentsOf: file, encoding: .utf8)

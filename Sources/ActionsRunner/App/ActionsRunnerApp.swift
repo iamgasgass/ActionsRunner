@@ -85,7 +85,6 @@ final class RunCenter {
     /// Riprende il monitoraggio di una run non ancora terminata (o ne ricarica lo stato finale).
     func refreshCloud(_ model: CloudRunModel) {
         guard model.runId != nil, let e = engine(for: model), !e.isActive else { return }
-        if case .failed = model.phase { return }
         if model.phase == .finished && !model.jobs.isEmpty && model.jobs.allSatisfy({ $0.logState == .complete }) { return }
         e.resume()
     }
@@ -114,8 +113,8 @@ final class RunCenter {
             return m
         }
         // riprende subito solo le run recenti; le altre si aggiornano quando vengono aperte
+        // (anche quelle segnate in errore dal monitoraggio, es. un 404 momentaneo di GitHub)
         for m in cloudRuns where m.runId != nil && Date().timeIntervalSince(m.createdAt) < 86_400 * 2 {
-            if case .failed = m.phase { continue }
             refreshCloud(m)
         }
     }
